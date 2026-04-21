@@ -18,6 +18,7 @@ class Linear(nn.Module):
                 device=device,
                 dtype=dtype
             )
+
         init_std = sqrt(2 / (in_features + out_features))
         nn.init.trunc_normal_(
             W,
@@ -25,8 +26,8 @@ class Linear(nn.Module):
             a=-3*init_std,
             b=3*init_std
         )
-        self.W = nn.Parameter(W)
 
+        self.W = nn.Parameter(W)
         self.in_features = in_features
         self.out_features = out_features
 
