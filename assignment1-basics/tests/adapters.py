@@ -11,6 +11,7 @@ from torch import Tensor
 
 from cs336_basics.bpe_trainer import bpe_trainer
 from cs336_basics.tokenizer import Tokenizer
+from cs336_basics.linear import Linear
 
 
 def run_linear(
@@ -32,7 +33,9 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    raise NotImplementedError
+    layer = Linear(d_in, d_out)
+    layer.load_state_dict({'W': weights})
+    return layer(in_features)
 
 
 def run_embedding(
@@ -562,7 +565,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    # raise NotImplementedError
+
     return Tokenizer(vocab, merges, special_tokens)
 
 
@@ -593,5 +596,5 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    # raise NotImplementedError
+
     return bpe_trainer(input_path, vocab_size, special_tokens)
