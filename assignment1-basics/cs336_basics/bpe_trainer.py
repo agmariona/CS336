@@ -2,7 +2,7 @@ import regex as re
 from multiprocessing import Pool
 from .pretokenization_example import find_chunk_boundaries
 
-def bpe_tokenizer(
+def bpe_trainer(
     input_path: str,
     vocab_size: int,
     special_tokens: list[str]
@@ -54,7 +54,7 @@ def bpe_tokenizer(
     for batch in pretoken_count_batches:
         for ptk, count in batch.items():
             pretoken_counts[ptk] = pretoken_counts.get(ptk, 0) + count
-    print(f'\t\tPretokenization complete.')
+    # print(f'\t\tPretokenization complete.')
 
     # first, count up pairs using base vocab
     merge_hist: list[tuple[bytes, bytes]] = []
@@ -203,10 +203,6 @@ def pretokenize_chunk(
                 word = match.group(0)
                 bword = word.encode('utf-8')
                 ptk = tuple(bword[i:i+1] for i in range(len(bword)))
-                # if ptk in pretoken_counts:
-                #     pretoken_counts[ptk] += 1
-                # else:
-                #     pretoken_counts[ptk] = 1
                 pretoken_counts[ptk] = pretoken_counts.get(ptk, 0) + 1
 
     return pretoken_counts
