@@ -27,8 +27,8 @@ class RMSNorm(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor                 # [batch_size, seq_length, d_model]
-    ) -> torch.Tensor:                  # [batch_size, seq_length, d_model]
+        x: torch.Tensor                 # [batch_size seq_length d_model]
+    ) -> torch.Tensor:                  # [batch_size seq_length d_model]
         in_type = x.dtype
         x = x.to(torch.float32)
 
@@ -133,8 +133,8 @@ class RotaryPositionalEmbedding(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,                    # [..., seq_len, d_k]
-        token_positions: torch.Tensor       # [..., seq_len]
+        x: torch.Tensor,                    # [... seq_len d_k]
+        token_positions: torch.Tensor       # [... seq_len]
     ) -> torch.Tensor:
         x = rearrange(x,
                 '... seq_len (n_pairs p) -> ... seq_len n_pairs p',
@@ -154,3 +154,37 @@ class RotaryPositionalEmbedding(nn.Module):
 
         return out
 
+
+def softmax(
+    x: torch.Tensor,
+    dim: int
+) -> torch.Tensor:
+    max_val, _ = x.max(dim=dim, keepdim=True)
+    v_exp = torch.exp(x - max_val)
+    out = v_exp / torch.sum(v_exp, dim=dim, keepdim=True)
+
+    return out
+
+def scaled_dot_product_attention(
+    Q: torch.Tensor,                    # [batch_size ... q_len d_k]
+    K: torch.Tensor,                    # [batch_size ... k_len d_k]
+    V: torch.Tensor,                    # [batch_size ... k_len d_v]
+    mask: torch.Tensor | None = None    # [seq_len seq_len]
+) -> torch.Tensor:                      # [batch_size ... q_len d_v]
+    if mask is not None and mask.dtype != torch.bool:
+        raise ValueError('mask must be a boolean tensor')
+
+    d_k = Q.size(-1)
+    pre_mask = einsum(Q, K,
+        '... q_len d_k, ... k_len d_k -> ... q_len k_len')
+    pre_mask = pre_mask / sqrt(d_k)
+
+    if mask is not None:
+        post_mask = pre_mask.masked_fill(~mask, -torch.inf)
+    else:
+        post_mask = pre_mask
+
+    out = einsum(softmax(post_mask, dim=-1), V,
+        '... q_len k_len, ... k_len d_v -> ... q_len d_v')
+
+    return out
