@@ -397,7 +397,18 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+
+    tf_lm = TransformerLM(
+        vocab_size,
+        context_length,
+        num_layers,
+        d_model,
+        num_heads,
+        d_ff,
+        rope_theta
+    )
+    tf_lm.load_state_dict(weights)
+    return tf_lm(in_indices)
 
 
 def run_rmsnorm(
@@ -437,7 +448,8 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+
+    return in_features * torch.special.expit(in_features)
 
 
 def run_get_batch(
