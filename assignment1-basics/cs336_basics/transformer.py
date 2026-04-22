@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from einops import reduce, einsum, rearrange
 from math import sqrt
+from .basic_layers import *
 
 
 class RMSNorm(nn.Module):
@@ -14,16 +15,15 @@ class RMSNorm(nn.Module):
     ) -> None:
         super().__init__()
 
-        G = torch.ones(
+        weight = torch.ones(
                 [d_model],
                 device=device,
                 dtype=dtype
             )
 
-        self.G = nn.Parameter(G)
+        self.weight = nn.Parameter(weight)
         self.d_model = d_model
         self.eps = eps
-
 
     def forward(
         self,
@@ -35,7 +35,7 @@ class RMSNorm(nn.Module):
         mean_sq = reduce(x.pow(2), '... d_model -> ... 1', 'mean')
         rrms = torch.rsqrt(mean_sq + self.eps)
 
-        rmsnorm = x * rrms * self.G
+        rmsnorm = x * rrms * self.weight
 
         return rmsnorm.to(in_type)
 
@@ -54,45 +54,18 @@ class SwiGLU(nn.Module):
             # (8/3)*d_model, to the nearest multiple of 64
             d_ff = round(((8/3)*d_model) / 64) * 64
 
-        W1 = torch.empty(
-                [d_ff, d_model],
-                device=device,
-                dtype=dtype
-            )
-        W3 = torch.empty(
-                [d_ff, d_model],
-                device=device,
-                dtype=dtype
-            )
-        W2 = torch.empty(
-                [d_model, d_ff],
-                device=device,
-                dtype=dtype
-            )
+        self.w1 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
+        self.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
 
-        init_std = sqrt(2 / (d_ff + d_model))
-        nn.init.trunc_normal_(W1, std=init_std, a=-3*init_std, b=3*init_std)
-        nn.init.trunc_normal_(W2, std=init_std, a=-3*init_std, b=3*init_std)
-        nn.init.trunc_normal_(W3, std=init_std, a=-3*init_std, b=3*init_std)
-
-        self.W1 = nn.Parameter(W1)
-        self.W2 = nn.Parameter(W2)
-        self.W3 = nn.Parameter(W3)
         self.d_model = d_model
         self.d_ff = d_ff
-
 
     def forward(
         self,
         x: torch.Tensor
     ) -> torch.Tensor:
-        W1x = einsum(x, self.W1, "... d_model, d_ff d_model -> ... d_ff")
-        W3x = einsum(x, self.W3, "... d_model, d_ff d_model -> ... d_ff")
-        GLU = self._silu(W1x) * W3x
-        out = einsum(GLU, self.W2, "... d_ff, d_model d_ff -> ... d_model")
-
-        return out
-
+        return self.w2(self._silu(self.w1(x)) * self.w3(x))
 
     def _silu(
         self,
@@ -165,6 +138,7 @@ def softmax(
 
     return out
 
+
 def scaled_dot_product_attention(
     Q: torch.Tensor,                    # [batch_size ... q_len d_k]
     K: torch.Tensor,                    # [batch_size ... k_len d_k]
@@ -188,3 +162,109 @@ def scaled_dot_product_attention(
         '... q_len k_len, ... k_len d_v -> ... q_len d_v')
 
     return out
+
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        rope: RotaryPositionalEmbedding | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None
+    ) -> None:
+        super().__init__()
+
+        if d_model % num_heads != 0:
+            raise ValueError('num_heads must divide d_model')
+
+        d_k = d_model // num_heads                  # we assume d_k = d_v
+
+        if rope is not None and rope.d_k != d_k:
+            raise ValueError('RoPE and MHSA must use same d_k')
+
+        self.q_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.k_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.v_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.output_proj = Linear(
+            d_model, d_model, device=device, dtype=dtype)
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_k
+
+        self.rope = rope
+
+    def forward(
+        self,
+        x: torch.Tensor,                                # [... seq_len d_model]
+        token_positions: torch.Tensor | None = None     # [... seq_len]
+    ) -> torch.Tensor:                                  # [... seq_len d_model]
+        if token_positions is None and self.rope is not None:
+            raise ValueError('token_positions required for MHSA with RoPE')
+
+        seq_len = x.size(-2)
+        all_true = torch.ones(
+            [seq_len, seq_len],
+            dtype=torch.bool,
+            device=x.device
+        )
+        mask = ~torch.triu(all_true, diagonal=1)
+
+        Qx = rearrange(self.q_proj(x),
+                '... seq_len (num_heads d_k) -> ... num_heads seq_len d_k',
+                num_heads = self.num_heads, d_k = self.d_k
+            )
+        Kx = rearrange(self.k_proj(x),
+                '... seq_len (num_heads d_k) -> ... num_heads seq_len d_k',
+                num_heads = self.num_heads, d_k = self.d_k
+            )
+        Vx = rearrange(self.v_proj(x),
+                '... seq_len (num_heads d_k) -> ... num_heads seq_len d_k',
+                num_heads = self.num_heads, d_k = self.d_k
+            )
+
+        if self.rope is not None:
+            Qx = self.rope(Qx, token_positions)
+            Kx = self.rope(Kx, token_positions)
+
+        mhsa = scaled_dot_product_attention(Qx, Kx, Vx, mask)
+        mhsa = rearrange(mhsa,
+                '... num_heads seq_len d_k -> ... seq_len (num_heads d_k)')
+
+        out = self.output_proj(mhsa)
+
+        return out
+
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        rope: RotaryPositionalEmbedding | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None
+    ) -> None:
+        super().__init__()
+
+        self.attn = MultiHeadSelfAttention(
+            d_model, num_heads, rope, device=device, dtype=dtype)
+        self.ln1= RMSNorm(d_model, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+
+    def forward(
+        self,
+        x: torch.Tensor,        # [... seq_length d_model]
+    ) -> torch.Tensor:          # [... seq_length d_model]
+        seq_length = x.size(-2)
+        token_positions = rearrange(
+            torch.arange(seq_length, device=x.device),
+            'seq_length -> 1 seq_length'
+        ).expand(*x.shape[:-1])
+        y = x + self.attn(self.ln1(x), token_positions)
+        z = y + self.ffn(self.ln2(y))
+
+        return z
+

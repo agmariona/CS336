@@ -35,7 +35,7 @@ def run_linear(
     """
 
     layer = Linear(d_in, d_out)
-    layer.load_state_dict({'W': weights})
+    layer.load_state_dict({'weight': weights})
     return layer(in_features)
 
 
@@ -59,7 +59,7 @@ def run_embedding(
     """
 
     layer = Embedding(vocab_size, d_model)
-    layer.load_state_dict({'W': weights})
+    layer.load_state_dict({'weight': weights})
     return layer(token_ids)
 
 
@@ -95,9 +95,9 @@ def run_swiglu(
 
     layer = SwiGLU(d_model, d_ff)
     layer.load_state_dict({
-        'W1': w1_weight,
-        'W2': w2_weight,
-        'W3': w3_weight
+        'w1.weight': w1_weight,
+        'w2.weight': w2_weight,
+        'w3.weight': w3_weight
     })
     return layer(in_features)
 
@@ -155,7 +155,15 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+
+    layer = MultiHeadSelfAttention(d_model, num_heads)
+    layer.load_state_dict({
+        'q_proj.weight': q_proj_weight,
+        'k_proj.weight': k_proj_weight,
+        'v_proj.weight': v_proj_weight,
+        'output_proj.weight': o_proj_weight
+    })
+    return layer(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -195,7 +203,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+
+    rope = RotaryPositionalEmbedding(theta, d_model // num_heads, max_seq_len)
+
+    layer = MultiHeadSelfAttention(d_model, num_heads, rope)
+    layer.load_state_dict({
+        'q_proj.weight': q_proj_weight,
+        'k_proj.weight': k_proj_weight,
+        'v_proj.weight': v_proj_weight,
+        'output_proj.weight': o_proj_weight
+    })
+
+    return layer(in_features, token_positions)
 
 
 def run_rope(
@@ -218,8 +237,8 @@ def run_rope(
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
 
-    layer = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
-    return layer(in_query_or_key, token_positions)
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    return rope(in_query_or_key, token_positions)
 
 def run_transformer_block(
     d_model: int,
@@ -291,7 +310,12 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+
+    d_k = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    layer = TransformerBlock(d_model, num_heads, d_ff, rope)
+    layer.load_state_dict(weights)
+    return layer(in_features)
 
 
 def run_transformer_lm(
@@ -398,7 +422,7 @@ def run_rmsnorm(
     """
 
     layer = RMSNorm(d_model, eps)
-    layer.load_state_dict({'G': weights})
+    layer.load_state_dict({'weight': weights})
     return layer(in_features)
 
 
