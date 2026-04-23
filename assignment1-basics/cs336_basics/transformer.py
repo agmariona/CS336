@@ -3,6 +3,7 @@ import torch.nn as nn
 from einops import reduce, einsum, rearrange
 from math import sqrt
 from .basic_layers import *
+from .nn_utils import softmax
 
 
 class RMSNorm(nn.Module):
@@ -126,17 +127,6 @@ class RotaryPositionalEmbedding(nn.Module):
             )
 
         return out
-
-
-def softmax(
-    x: torch.Tensor,
-    dim: int
-) -> torch.Tensor:
-    max_val, _ = x.max(dim=dim, keepdim=True)
-    v_exp = torch.exp(x - max_val)
-    out = v_exp / torch.sum(v_exp, dim=dim, keepdim=True)
-
-    return out
 
 
 def scaled_dot_product_attention(

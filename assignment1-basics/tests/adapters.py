@@ -11,8 +11,9 @@ from torch import Tensor
 
 from cs336_basics.bpe_trainer import bpe_trainer
 from cs336_basics.tokenizer import Tokenizer
-from cs336_basics.basic_layers import Linear, Embedding
+from cs336_basics.basic_layers import *
 from cs336_basics.transformer import *
+from cs336_basics.nn_utils import *
 
 
 def run_linear(
@@ -488,6 +489,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
+
     return softmax(in_features, dim)
 
 
@@ -506,7 +508,8 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:

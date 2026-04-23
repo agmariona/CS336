@@ -31,6 +31,10 @@ def accounting(
 
     print(f'\tTotal parameters: {total_params / 1e9:.2f} B')
     print(f'\tTotal memory: {total_size / 1e9:.2f} GB')
+    print(f'\t\t{attn_params / total_params * 100:2.0f}% attention')
+    print(f'\t\t{ffn_params / total_params * 100:2.0f}% mlp')
+    print(f'\t\t{emb_params / total_params * 100:2.0f}% embeddings')
+    print(f'\t\t{norm_params / total_params * 100:2.0f}% norms')
 
     # --- flops
     attn_flops = 0
@@ -58,7 +62,7 @@ def accounting(
 
 if __name__ == '__main__':
     vocab_size = 50257
-    context_length = 16384
+    context_length = 1024
 
     num_layers = 48
     d_model = 1600
