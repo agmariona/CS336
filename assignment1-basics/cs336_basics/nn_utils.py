@@ -1,5 +1,7 @@
+from collections.abc import Iterable
 import torch
 from einops import rearrange
+from math import sqrt
 
 def softmax(
     x: torch.Tensor,
@@ -40,3 +42,27 @@ def cross_entropy(
 
     return out_mean
 
+
+def gradient_clipping(
+    parameters: Iterable[torch.nn.Parameter],
+    max_l2_norm: float
+) -> None:
+    eps = 1e-6
+
+    parameters = list(parameters)
+    norm_accum = 0
+    for p in parameters:
+        if p.grad is None:
+            continue
+
+        norm_accum += torch.linalg.vector_norm(p.grad.data, ord=2)**2
+    norm = sqrt(norm_accum)
+
+    if norm <= max_l2_norm:
+        return
+
+    for p in parameters:
+        if p.grad is None:
+            continue
+
+        p.grad.data = p.grad.data * max_l2_norm / (norm + eps)

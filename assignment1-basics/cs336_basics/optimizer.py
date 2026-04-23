@@ -1,7 +1,7 @@
 from collections.abc import Callable, Iterable
 from typing import Optional
 import torch
-from math import sqrt
+from math import sqrt, cos, pi
 
 
 class AdamW(torch.optim.Optimizer):
@@ -68,3 +68,28 @@ class AdamW(torch.optim.Optimizer):
 
         return loss
 
+
+def lr_cosine_schedule(
+    it: int,
+    max_lr: float,
+    min_lr: float,
+    warmup_its: int,
+    cos_cycle_its: int
+) -> float:
+    if warmup_its <= 0:
+        raise ValueError("Warm-up iteration count must be positive")
+    if warmup_its == cos_cycle_its:
+        raise ValueError(
+            "Final cosine annealing iteration must be greater than "
+            "warm-up iteration count"
+        )
+
+    if it < warmup_its:
+        return (it / warmup_its) * max_lr
+    elif it <= cos_cycle_its:
+        return min_lr + \
+            (1/2)*(1 + cos(
+                pi * (it - warmup_its) / (cos_cycle_its - warmup_its)
+            )) * (max_lr - min_lr)
+    else:
+        return min_lr
