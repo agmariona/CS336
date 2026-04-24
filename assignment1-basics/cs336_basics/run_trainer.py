@@ -4,10 +4,12 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 import torch
+import wandb
+import json
 
 from .transformer import TransformerLM
 from .optimizer import AdamW
-from .training_utils import load_checkpoint, StdoutLogger
+from .training_utils import load_checkpoint, StdoutLogger, WandbLogger
 from .training import train
 
 def load_cfg(path: str | Path) -> dict[str, Any]:
@@ -35,12 +37,22 @@ def main() -> None:
     optimizer_cfg = config["optimizer"]
     runtime_cfg = config["runtime"]
     model_cfg = config["model"]
+    tokenizer_cfg = config["tokenizer"]
 
     if training_cfg["context_length"] > model_cfg["max_seq_length"]:
         raise ValueError(
             f'Training context length {training_cfg["context_length"]} '
             'must be less than model maximum sequence length '
             f'{model_cfg["max_seq_length"]}'
+        )
+
+    with open(tokenizer_cfg["vocab_path"], 'r', encoding='utf-8') as f:
+        vocab_len = len(json.load(f))
+
+    if vocab_len != model_cfg["vocab_size"]:
+        raise ValueError(
+            f'Model vocab size {model_cfg["vocab_size"]} does not match ',
+            f'tokenizer vocab size {vocab_len}'
         )
 
     # set seed
@@ -52,6 +64,14 @@ def main() -> None:
     # map training / validation data
     train_memmap = np.load(data_cfg["train_path"], mmap_mode = 'r')
     val_memmap = np.load(data_cfg["val_path"], mmap_mode = 'r')
+
+    # load from checkpoint if given
+    resume_from = runtime_cfg.get("resume_from")
+    if resume_from is not None:
+        # TODO: check that config matches checkpoint model
+        start_iteration = load_checkpoint(resume_from)
+    else:
+        start_iteration = 0
 
     # construct model
     model = TransformerLM(
@@ -75,20 +95,20 @@ def main() -> None:
     )
 
     # construct logger
-    logger_type = runtime_cfg.get("logger")
-    if logger_type is None or logger_type == 'stdout':
+    if runtime_cfg.get("logger") == "stdout":
         logger = StdoutLogger()
-    else:
-        raise ValueError(
-            f'Unsupported logger: {logger_type}'
+    elif runtime_cfg.get("logger") == "wandb":
+        wandb_cfg = config["wandb"]
+        run = wandb.init(
+            project = wandb_cfg["project"],
+            entity = wandb_cfg.get("entity"),
+            name = wandb_cfg.get("name"),
+            mode = wandb_cfg.get("mode", "online"),
+            config=config
         )
-
-    # load from checkpoint if given
-    resume_from = runtime_cfg.get("resume_from")
-    if resume_from is not None:
-        start_iteration = load_checkpoint(resume_from, model, optimizer)
+        logger = WandbLogger(run)
     else:
-        start_iteration = 0
+        logger = None
 
     train(
         model = model,
@@ -96,10 +116,17 @@ def main() -> None:
         train_data = train_memmap,
         val_data = val_memmap,
         config = training_cfg,
+        metadata = {
+            "model_config": model_cfg,
+            "tokenizer_config": tokenizer_cfg
+        },
         device = runtime_cfg["device"],
         logger = logger,
         start_iteration = start_iteration
     )
+
+    if runtime_cfg.get("logger") == "wandb":
+        run.finish()
 
 
 if __name__ == "__main__":

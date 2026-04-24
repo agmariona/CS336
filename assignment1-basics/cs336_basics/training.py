@@ -11,6 +11,7 @@ def train(
     train_data: np.typing.NDArray,
     val_data: np.typing.NDArray,
     config: Mapping[str, Any],
+    metadata: Mapping[str, Any],
     device: str | torch.device,
     logger: Logger | None = None,
     start_iteration: int = 0
@@ -106,10 +107,11 @@ def train(
         # checkpoint
         if iteration % config["checkpoint_every"] == 0:
             save_checkpoint(
-                model,
-                optimizer,
-                iteration,
-                config["checkpoint_path"]
+                model = model,
+                optimizer = optimizer,
+                iteration = iteration,
+                metadata = metadata,
+                out = config["checkpoint_path"]
             )
 
     return iteration
