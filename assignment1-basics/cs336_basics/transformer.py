@@ -117,6 +117,15 @@ class RotaryPositionalEmbedding(nn.Module):
         sin_th = self.sin_table[token_positions]
         cos_th = self.cos_table[token_positions]
 
+        sin_th = rearrange(
+            sin_th,
+            "... seq_len n_pairs -> ... 1 seq_len n_pairs"
+        )
+        cos_th = rearrange(
+            cos_th,
+            "... seq_len n_pairs -> ... 1 seq_len n_pairs"
+        )
+
         out_a = cos_th * x[..., 0] - sin_th * x[..., 1]
         out_b = sin_th * x[..., 0] + cos_th * x[..., 1]
 

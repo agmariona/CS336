@@ -1,56 +1,147 @@
 import torch
 import numpy as np
-import typing
-import os
+from typing import Mapping, Any
 
-def data_loader(
-    x: np.typing.NDArray,
-    batch_size: int,
-    context_length: int,
-    device: str | torch.device
-) -> tuple[torch.Tensor, torch.Tensor]:
-    x = x.reshape(-1)
+from .training_utils import data_loader, save_checkpoint, Logger
+from .nn_utils import cross_entropy, gradient_clipping
 
-    if len(x) <= context_length:
-        raise ValueError(
-            f"context length {context_length} must be less than "
-            f"data length {len(x)}"
+def train(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    train_data: np.typing.NDArray,
+    val_data: np.typing.NDArray,
+    config: Mapping[str, Any],
+    device: str | torch.device,
+    logger: Logger | None = None,
+    start_iteration: int = 0
+) -> int:
+    config_must_be_positive = [
+        "batch_size",
+        "context_length",
+        "iterations",
+        "eval_batches",
+        "log_every",
+        "eval_every",
+        "checkpoint_every"
+    ]
+    config_must_be_positive_or_none = [
+        "max_norm"
+    ]
+    for key in config_must_be_positive:
+        if config[key] <= 0:
+            raise ValueError(
+                f'config["{key}"] must be positive; got {config[key]}.'
+            )
+    for key in config_must_be_positive_or_none:
+        if config[key] is not None and config[key] <= 0:
+            raise ValueError(
+                f'config["{key}"] must be positive or None; got {config[key]}.'
+            )
+
+    if start_iteration >= config["iterations"]:
+        return start_iteration
+
+    # validate and log initial model
+    val_loss = evaluate(
+        model = model,
+        val_data = val_data,
+        eval_batches = config["eval_batches"],
+        batch_size = config["batch_size"],
+        context_length = config["context_length"],
+        device = device
+    )
+    model.train()
+
+    if logger:
+        metrics = {'val/loss': val_loss}
+        logger.log(metrics, start_iteration)
+
+    # training loop
+    for step in range(start_iteration, config["iterations"]):
+        iteration = step + 1
+        optimizer.zero_grad()
+
+        # get batch
+        (train_inputs, train_targets) = data_loader(
+            train_data,
+            config["batch_size"],
+            config["context_length"],
+            device
         )
 
-    starts = np.random.choice(
-        len(x) - context_length,
-        batch_size
-    )
-    offsets = np.arange(context_length)
-    indices = starts[:, None] + offsets[None,:]
+        # forward pass
+        logits = model(train_inputs)
 
-    inputs = x[indices]
-    targets = x[indices+1]
+        # backward pass
+        train_loss = cross_entropy(logits, train_targets)
+        train_loss.backward()
 
-    inputs_tensor = torch.as_tensor(inputs, device=device, dtype=torch.long)
-    targets_tensor = torch.as_tensor(targets, device=device, dtype=torch.long)
+        # gradient clipping
+        if config["max_norm"] is not None:
+            gradient_clipping(model.parameters(), config["max_norm"])
 
-    return(inputs_tensor, targets_tensor)
+        # optimize
+        optimizer.step()
 
-def save_checkpoint(
+        # evaluate
+        if iteration % config["eval_every"] == 0:
+            val_loss = evaluate(
+                model = model,
+                val_data = val_data,
+                eval_batches = config["eval_batches"],
+                batch_size = config["batch_size"],
+                context_length = config["context_length"],
+                device = device
+            )
+
+            if logger:
+                metrics = {'val/loss': val_loss}
+                logger.log(metrics, iteration)
+
+        # log
+        if logger and iteration % config["log_every"] == 0:
+            metrics = {'train/loss': train_loss.item()}
+            logger.log(metrics, iteration)
+
+        # checkpoint
+        if iteration % config["checkpoint_every"] == 0:
+            save_checkpoint(
+                model,
+                optimizer,
+                iteration,
+                config["checkpoint_path"]
+            )
+
+    return iteration
+
+
+def evaluate(
     model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    iteration: int,
-    out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]
-) -> None:
-    obj = {
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "iteration": iteration
-    }
-    torch.save(obj, out)
+    val_data: np.typing.NDArray,
+    eval_batches: int,
+    batch_size: int,
+    context_length: int,
+    device: str | torch.device,
+) -> float:
+    was_training = model.training
+    model.eval()
 
-def load_checkpoint(
-    src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-) -> int:
-    obj = torch.load(src)
-    model.load_state_dict(obj["model"])
-    optimizer.load_state_dict(obj["optimizer"])
-    return obj["iteration"]
+    try:
+        val_loss = 0.0
+        with torch.no_grad():
+            for _ in range(eval_batches):
+                (val_inputs, val_targets) = data_loader(
+                    val_data,
+                    batch_size,
+                    context_length,
+                    device
+                )
+
+                logits = model(val_inputs)
+                val_loss += cross_entropy(logits, val_targets).item()
+        val_loss /= eval_batches
+
+        return val_loss
+
+    finally:
+        model.train(was_training)

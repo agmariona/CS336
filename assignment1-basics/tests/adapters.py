@@ -15,7 +15,7 @@ from cs336_basics.basic_layers import *
 from cs336_basics.transformer import *
 from cs336_basics.nn_utils import *
 from cs336_basics.optimizer import *
-from cs336_basics.training import *
+from cs336_basics.training_utils import *
 
 
 def run_linear(
