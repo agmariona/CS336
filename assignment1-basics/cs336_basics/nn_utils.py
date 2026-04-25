@@ -45,11 +45,24 @@ def cross_entropy(
 
 def gradient_clipping(
     parameters: Iterable[torch.nn.Parameter],
-    max_l2_norm: float
-) -> None:
-    eps = 1e-6
-
+    max_l2_norm: float,
+    eps: float | None = 1e-6
+) -> float:
     parameters = list(parameters)
+    norm = gradient_norm(parameters)
+    if norm > max_l2_norm:
+        for p in parameters:
+            if p.grad is None:
+                continue
+
+            p.grad.data = p.grad.data * max_l2_norm / (norm + eps)
+
+    # return pre-clipped norm
+    return norm
+
+def gradient_norm(
+    parameters: Iterable[torch.nn.Parameter]
+) -> float:
     norm_accum = 0
     for p in parameters:
         if p.grad is None:
@@ -58,11 +71,4 @@ def gradient_clipping(
         norm_accum += torch.linalg.vector_norm(p.grad.data, ord=2)**2
     norm = sqrt(norm_accum)
 
-    if norm <= max_l2_norm:
-        return
-
-    for p in parameters:
-        if p.grad is None:
-            continue
-
-        p.grad.data = p.grad.data * max_l2_norm / (norm + eps)
+    return norm

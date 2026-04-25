@@ -70,11 +70,11 @@ def decode(
     return tokenizer.decode(prompt_tokens + output_tokens)
 
 def main():
-    checkpoint_path = 'checkpoints/latest.pt'
-    prompt = "Once upon a time"
-    max_output_len = 128
-    temperature = 1
-    top_p = 0.9
+    checkpoint_path = 'checkpoints/gonna-be-2.pt'
+    prompt = "Four happy young men were living together"
+    max_output_len = 256
+    temperature = 1.2
+    top_p = 0.90
 
     output = decode(
         checkpoint_path = checkpoint_path,

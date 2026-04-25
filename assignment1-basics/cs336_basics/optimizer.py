@@ -19,8 +19,8 @@ class AdamW(torch.optim.Optimizer):
             raise ValueError("Hyperparameters beta must be in [0,1)")
         if eps <= 0:
             raise ValueError("Hyperparameter eps must be positive")
-        if weight_decay <= 0:
-            raise ValueError("Weight decay rate must be positive")
+        if weight_decay < 0:
+            raise ValueError("Weight decay rate must be nonnegative")
         defaults = {
             "lr": lr,
             "betas": betas,
@@ -78,7 +78,7 @@ def lr_cosine_schedule(
 ) -> float:
     if warmup_its <= 0:
         raise ValueError("Warm-up iteration count must be positive")
-    if warmup_its == cos_cycle_its:
+    if warmup_its >= cos_cycle_its:
         raise ValueError(
             "Final cosine annealing iteration must be greater than "
             "warm-up iteration count"

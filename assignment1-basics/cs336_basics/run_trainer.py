@@ -65,13 +65,6 @@ def main() -> None:
     train_memmap = np.load(data_cfg["train_path"], mmap_mode = 'r')
     val_memmap = np.load(data_cfg["val_path"], mmap_mode = 'r')
 
-    # load from checkpoint if given
-    resume_from = runtime_cfg.get("resume_from")
-    if resume_from is not None:
-        # TODO: check that config matches checkpoint model
-        start_iteration = load_checkpoint(resume_from)
-    else:
-        start_iteration = 0
 
     # construct model
     model = TransformerLM(
@@ -94,6 +87,14 @@ def main() -> None:
         weight_decay = optimizer_cfg["weight_decay"]
     )
 
+    # load from checkpoint if given
+    resume_from = runtime_cfg.get("resume_from")
+    if resume_from is not None:
+        # TODO: check that config matches checkpoint model
+        start_iteration = load_checkpoint(resume_from, model, optimizer)
+    else:
+        start_iteration = 0
+
     # construct logger
     if runtime_cfg.get("logger") == "stdout":
         logger = StdoutLogger()
@@ -115,7 +116,8 @@ def main() -> None:
         optimizer = optimizer,
         train_data = train_memmap,
         val_data = val_memmap,
-        config = training_cfg,
+        train_cfg = training_cfg,
+        optim_cfg = optimizer_cfg,
         metadata = {
             "model_config": model_cfg,
             "tokenizer_config": tokenizer_cfg
