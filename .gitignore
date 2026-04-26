@@ -1,4 +1,10 @@
+# Project files
 *.DS_store
+assignment1-basics/checkpoints/
+assignment1-basics/data/
+assignment1-basics/train_config/
+assignment1-basics/wandb/
+assignment1-basics/cs336_basics/sgd.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -79,7 +79,7 @@ def adamw_accounting(
         d_model,
         num_heads,
         d_ff,
-        1
+        param_size
     )
 
     # for each parameter, need to record first and second moments
@@ -124,18 +124,16 @@ def adamw_accounting(
 
 
 if __name__ == '__main__':
-    vocab_size = 50257
-    context_length = 1024
-
-    num_layers = 48
-    d_model = 1600
-    num_heads = 25
-
-    d_ff = 4288
+    vocab_size = 10000
+    context_length = 256
+    num_layers = 4
+    d_model = 512
+    num_heads = 16
+    d_ff = 1344
     param_size = 4
 
     x,y,f = adamw_accounting(
-        1024,
+        1,
         vocab_size,
         context_length,
         num_layers,
@@ -144,11 +142,11 @@ if __name__ == '__main__':
         d_ff
     )
 
-    # print('\t\nAdamW memory usage =',
-    #     f'({x/1e9:.2f} * batch_size + {y/1e9:.2f}) GB')
-    # print('\tMaximum batch size for 80 GB memory =',
-    #     f'{floor((80 - (y/1e9)) / (x/1e9))}')
-    print('\tTime to train GPT-2 XL for ',
-        '400K steps, 1024 batch on 1 H100 with 50% MFU = '
-        f'{400e3 * 3*f / (.5 * 495e12) / 3600:.2f} hours')
+    print('\t\nAdamW memory usage =',
+        f'({x/1e9:.2f} * batch_size + {y/1e9:.2f}) GB')
+    print('\tMaximum batch size for 115 GB memory =',
+        f'{floor((115 - (y/1e9)) / (x/1e9))}')
+    # print('\tTime to train GPT-2 XL for ',
+    #     '400K steps, 1024 batch on 1 H100 with 50% MFU = '
+    #     f'{400e3 * 3*f / (.5 * 495e12) / 3600:.2f} hours')
 

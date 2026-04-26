@@ -102,7 +102,6 @@ def train(
     if logger:
         metrics = {
             "val/loss": val_loss,
-            "val/perplexity": perplexity(val_loss),
             "time/elapsed_sec": 0.0,
             "train/tokens_processed": tokens_processed
         }
@@ -155,7 +154,6 @@ def train(
 
             metrics["run/diverged"] = 1
             metrics["train/loss"] = loss_item
-            metrics["train/perplexity"] = perplexity(loss_item)
             metrics["train/tokens_processed"] = tokens_processed
             metrics["time/elapsed_sec"] = elapsed_sec
             metrics["optim/lr"] = curr_lr
@@ -188,7 +186,6 @@ def train(
         if iteration % log_every == 0:
             metrics["time/elapsed_sec"] = elapsed_sec
             metrics["train/loss"] = loss_item
-            metrics["train/perplexity"] = perplexity(loss_item)
             metrics["train/tokens_processed"] = tokens_processed
             metrics["perf/tokens_per_sec"] = tokens_this_run / elapsed_sec
             metrics["optim/grad_norm"] = grad_norm
@@ -210,7 +207,6 @@ def train(
             elapsed_sec = time.perf_counter() - train_start_time
 
             metrics["val/loss"] = val_loss
-            metrics["val/perplexity"] = perplexity(val_loss)
             metrics["time/eval_sec"] = eval_sec
             metrics["time/elapsed_sec"] = elapsed_sec
             metrics["train/tokens_processed"] = tokens_processed

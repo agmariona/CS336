@@ -1,5 +1,4 @@
 import argparse
-import yaml
 from pathlib import Path
 from typing import Any
 import numpy as np
@@ -9,19 +8,8 @@ import json
 
 from .transformer import TransformerLM
 from .optimizer import AdamW
-from .training_utils import load_checkpoint, StdoutLogger, WandbLogger
+from .training_utils import *
 from .training import train
-
-def load_cfg(path: str | Path) -> dict[str, Any]:
-    with open(path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    if config is None:
-        return {}
-    if not isinstance(config, dict):
-        raise ValueError(
-            "YAML config file must contain a top-level mapping."
-        )
-    return config
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -105,7 +93,8 @@ def main() -> None:
             entity = wandb_cfg.get("entity"),
             name = wandb_cfg.get("name"),
             mode = wandb_cfg.get("mode", "online"),
-            config=config
+            group = wandb_cfg.get("group"),
+            tags = wandb_cfg.get("tags")
         )
         logger = WandbLogger(run)
     else:

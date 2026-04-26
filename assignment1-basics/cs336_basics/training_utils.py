@@ -1,4 +1,5 @@
 import torch
+import yaml
 from pathlib import Path
 import numpy as np
 import typing
@@ -51,6 +52,10 @@ def save_checkpoint(
         "iteration": iteration,
         "metadata": metadata
     }
+
+    if isinstance(out, (str, os.PathLike)):
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+
     torch.save(obj, out)
 
 def load_checkpoint(
@@ -114,3 +119,15 @@ class WandbLogger:
 
     def log(self, metrics, step=None):
         self.run.log(metrics, step=step)
+
+def load_cfg(path: str | Path) -> dict[str, Any]:
+    with open(path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise ValueError(
+            "YAML config file must contain a top-level mapping."
+        )
+    return config
+
