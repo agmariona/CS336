@@ -53,7 +53,6 @@ def main() -> None:
     train_memmap = np.load(data_cfg["train_path"], mmap_mode = 'r')
     val_memmap = np.load(data_cfg["val_path"], mmap_mode = 'r')
 
-
     # construct model
     model = TransformerLM(
         vocab_size = model_cfg["vocab_size"],
