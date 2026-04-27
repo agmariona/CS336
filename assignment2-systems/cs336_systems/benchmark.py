@@ -1,4 +1,6 @@
 import torch
+import torch.cuda.nvtx as nvtx
+
 import argparse
 from timeit import default_timer as timer
 from statistics import mean, stdev
@@ -56,12 +58,13 @@ def benchmark(
     else:
         raise ValueError(f"Unsupported device: {device_type}")
 
-    for _ in range(warmup_steps):
-        optimizer.zero_grad()
-        logits = model(inputs)
-        loss = cross_entropy(logits, inputs)
-        loss.backward()
-        optimizer.step()
+    with nvtx.range("warmup"):
+        for _ in range(warmup_steps):
+            optimizer.zero_grad()
+            logits = model(inputs)
+            loss = cross_entropy(logits, inputs)
+            loss.backward()
+            optimizer.step()
 
     times = []
     sync()
@@ -82,14 +85,20 @@ def benchmark(
             times.append(timer() - t)
     elif mode == 'full':
         for _ in range(timed_steps):
-            t = timer()
-            optimizer.zero_grad()
-            logits = model(inputs)
-            loss = cross_entropy(logits, inputs)
-            loss.backward()
-            optimizer.step()
-            sync()
-            times.append(timer() - t)
+            with nvtx.range("timed_step"):
+                t = timer()
+                with nvtx.range("zero_grad"):
+                    optimizer.zero_grad()
+                with nvtx.range("forward"):
+                    logits = model(inputs)
+                with nvtx.range("loss"):
+                    loss = cross_entropy(logits, inputs)
+                with nvtx.range("backward"):
+                    loss.backward()
+                with nvtx.range("optimizer_step"):
+                    optimizer.step()
+                sync()
+                times.append(timer() - t)
     else:
         raise ValueError(f"Unsupported benchmark mode: {mode}")
 
