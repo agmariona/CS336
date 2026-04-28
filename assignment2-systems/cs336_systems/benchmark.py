@@ -1,39 +1,94 @@
 import torch
-import torch.cuda.nvtx as nvtx
 
 import argparse
 from timeit import default_timer as timer
 from statistics import mean, stdev
 import json
 
-from cs336_basics.model import TransformerLM
+import cs336_basics.model
 from cs336_basics.optimizer import AdamW
 from cs336_basics.nn_utils import cross_entropy
+from .profiling import *
+
+
+MODEL_CONFIGS = {
+    "small": {
+        "d_model": 768,
+        "d_ff": 3072,
+        "num_layers": 12,
+        "num_heads": 12
+    },
+    "medium": {
+        "d_model": 1024,
+        "d_ff": 4096,
+        "num_layers": 24,
+        "num_heads": 16
+    },
+    "large": {
+        "d_model": 1280,
+        "d_ff": 5120,
+        "num_layers": 36,
+        "num_heads": 20
+    },
+    "xl": {
+        "d_model": 2560,
+        "d_ff": 10240,
+        "num_layers": 32,
+        "num_heads": 32
+    },
+    "10B": {
+        "d_model": 4608,
+        "d_ff": 12288,
+        "num_layers": 50,
+        "num_heads": 36
+    }
+}
+
+DEFAULTS = {
+    "vocab_size": 10000,
+    "rope_theta": 10000,
+    "lr": 1e-3,
+    "betas": [0.9, 0.95],
+    "eps": 1e-8,
+    "weight_decay": 0.01
+}
+
+DTYPES = {
+    "float32": torch.float32,
+    "float16": torch.float16,
+    "bfloat16": torch.bfloat16
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--vocab-size", type=int, default=10000)
-    parser.add_argument("--batch-size", type=int, default=4)
+
+    parser.add_argument("--model-size",
+        choices=["small", "medium", "large", "xl", "10B"],
+        default="small"
+    )
+
+    parser.add_argument("--mode",
+        choices=["fwd", "fwd-bwd", "full"],
+        default="full"
+    )
+
+    parser.add_argument("--batch-size",     type=int, default=4)
     parser.add_argument("--context-length", type=int, default=512)
-    parser.add_argument("--d-model", type=int, default=768)
-    parser.add_argument("--d-ff", type=int, default=3072)
-    parser.add_argument("--rope-theta", type=int, default=10000)
-    parser.add_argument("--num-layers", type=int, default=12)
-    parser.add_argument("--num-heads", type=int, default=12)
 
-    parser.add_argument("--device", type=str, default="mps",
-        choices=["mps", "cuda"]
-    )
-    parser.add_argument("--dtype", type=str, default="float32",
-        choices=["float32", "float16", "bfloat16"]
-    )
+    parser.add_argument("--warmup-steps",   type=int, default=5)
+    parser.add_argument("--timed-steps",    type=int, default=10)
 
-    parser.add_argument("--warmup-steps", type=int, default=5)
-    parser.add_argument("--timed-steps", type=int, default=10)
-    parser.add_argument("--mode", type=str, default='full',
-        choices=["fwd", "fwd-bwd", "full"]
+    parser.add_argument("--dtype",
+        choices=["float32", "float16", "bfloat16"],
+        default="float32"
     )
+    parser.add_argument("--device", choices=["mps", "cuda"], default="cuda")
+
+    parser.add_argument("--annotate-attention", action="store_true")
+
     return parser.parse_args()
+
 
 def benchmark(
     model: torch.nn.Module,
@@ -43,11 +98,12 @@ def benchmark(
     timed_steps: int,
     mode: str
 ) -> tuple[float, float]:
+    # generate inputs
     inputs = torch.randint(
-        low = 0,
-        high = model.vocab_size,
-        size = (batch_size, model.context_length),
-        device = model.device
+        low     = 0,
+        high    = model.vocab_size,
+        size    = (batch_size, model.context_length),
+        device  = model.device
     )
 
     device_type = torch.device(model.device).type
@@ -58,7 +114,7 @@ def benchmark(
     else:
         raise ValueError(f"Unsupported device: {device_type}")
 
-    with nvtx.range("warmup"):
+    with nvtx_range("warmup"):
         for _ in range(warmup_steps):
             optimizer.zero_grad()
             logits = model(inputs)
@@ -70,84 +126,100 @@ def benchmark(
     sync()
     if mode == 'fwd':
         for _ in range(timed_steps):
-            t = timer()
-            logits = model(inputs)
-            sync()
-            times.append(timer() - t)
+            with nvtx_range("timed_step"):
+                t = timer()
+                with nvtx_range("forward"):
+                    with torch.no_grad():
+                        logits = model(inputs)
+                sync()
+                times.append(timer() - t)
+
     elif mode == 'fwd-bwd':
         for _ in range(timed_steps):
-            t = timer()
-            optimizer.zero_grad()
-            logits = model(inputs)
-            loss = cross_entropy(logits, inputs)
-            loss.backward()
-            sync()
-            times.append(timer() - t)
+            with nvtx_range("timed_step"):
+                t = timer()
+                with nvtx_range("zero_grad"):
+                    optimizer.zero_grad()
+                with nvtx_range("forward"):
+                    logits = model(inputs)
+                with nvtx_range("loss"):
+                    loss = cross_entropy(logits, inputs)
+                with nvtx_range("backward"):
+                    loss.backward()
+                sync()
+                times.append(timer() - t)
+
     elif mode == 'full':
         for _ in range(timed_steps):
-            with nvtx.range("timed_step"):
+            with nvtx_range("timed_step"):
                 t = timer()
-                with nvtx.range("zero_grad"):
+                with nvtx_range("zero_grad"):
                     optimizer.zero_grad()
-                with nvtx.range("forward"):
+                with nvtx_range("forward"):
                     logits = model(inputs)
-                with nvtx.range("loss"):
+                with nvtx_range("loss"):
                     loss = cross_entropy(logits, inputs)
-                with nvtx.range("backward"):
+                with nvtx_range("backward"):
                     loss.backward()
-                with nvtx.range("optimizer_step"):
+                with nvtx_range("optimizer_step"):
                     optimizer.step()
                 sync()
                 times.append(timer() - t)
+
     else:
         raise ValueError(f"Unsupported benchmark mode: {mode}")
 
-    return mean(times), stdev(times)
+    if timed_steps > 1:
+        t_stdev = stdev(times)
+    else:
+        t_stdev = None
+
+    return mean(times), t_stdev
 
 
 def main() -> None:
     args = parse_args()
 
-    dtypes = {
-        "float32": torch.float32,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16
-    }
+    if args.annotate_attention:
+        cs336_basics.model.scaled_dot_product_attention = \
+            annotated_scaled_dot_product_attention
 
-    model = TransformerLM(
-        vocab_size = args.vocab_size,
-        context_length = args.context_length,
-        num_layers = args.num_layers,
-        d_model = args.d_model,
-        num_heads = args.num_heads,
-        d_ff = args.d_ff,
-        rope_theta = args.rope_theta,
-        device = args.device,
-        dtype = dtypes[args.dtype]
+    model = cs336_basics.model.TransformerLM(
+        vocab_size      = DEFAULTS["vocab_size"],
+        context_length  = args.context_length,
+        num_layers      = MODEL_CONFIGS[args.model_size]["num_layers"],
+        d_model         = MODEL_CONFIGS[args.model_size]["d_model"],
+        num_heads       = MODEL_CONFIGS[args.model_size]["num_heads"],
+        d_ff            = MODEL_CONFIGS[args.model_size]["d_ff"],
+        rope_theta      = DEFAULTS["rope_theta"],
+        device          = args.device,
+        dtype           = DTYPES[args.dtype]
     )
 
     optimizer = AdamW(
-        params = model.parameters(),
-        lr = 1e-3,
-        betas = [0.9, 0.95],
-        eps = 1e-8,
-        weight_decay = 0.01
+        params          = model.parameters(),
+        lr              = DEFAULTS["lr"],
+        betas           = DEFAULTS["betas"],
+        eps             = DEFAULTS["eps"],
+        weight_decay    = DEFAULTS["weight_decay"],
     )
 
     time_mean, time_stdev = benchmark(
-        model = model,
-        optimizer = optimizer,
-        batch_size = args.batch_size,
-        warmup_steps = args.warmup_steps,
-        timed_steps = args.timed_steps,
-        mode = args.mode
+        model           = model,
+        optimizer       = optimizer,
+        batch_size      = args.batch_size,
+        warmup_steps    = args.warmup_steps,
+        timed_steps     = args.timed_steps,
+        mode            = args.mode
     )
 
-    print(json.dumps({
-        "mean_s": time_mean,
-        "std_s": time_stdev
-    }))
+    record = {
+        "time_mean":        time_mean,
+        "time_stdev":       time_stdev,
+        **vars(args)
+    }
 
+    print(json.dumps(record, indent=2))
 
 if __name__ == "__main__":
     main()
