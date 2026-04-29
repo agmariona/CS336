@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--mixed-precision", action="store_true")
     parser.add_argument("--profile-memory", action="store_true")
+    parser.add_argument("--profile-cuda-memory", action="store_true")
 
     return parser.parse_args()
 
@@ -116,6 +117,8 @@ def main() -> None:
                     "--cudabacktrace=all",
                     "--python-backtrace=cuda"
                 ]
+            if args.profile_cuda_memory:
+                cmd += ["--cuda-memory-usage=true"]
             cmd += [
                 "--output", str(profile_path),
                 "--",
