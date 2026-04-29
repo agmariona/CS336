@@ -37,13 +37,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-dir", default="results/nsys")
     parser.add_argument("--profile-full-trace", action="store_true")
 
+    parser.add_argument("--mixed-precision", action="store_true")
+
     return parser.parse_args()
+
+BOOL_FLAGS = {
+    "mixed_precision"
+}
 
 def config_to_args(config):
     args = []
     for key, value in config.items():
         flag = "--" + key.replace("_", "-")
-        args.extend([flag, str(value)])
+
+        if key in BOOL_FLAGS:
+            if value:
+                args.append(flag)
+        else:
+            args.extend([flag, str(value)])
     return args
 
 def config_to_name(config):
@@ -52,9 +63,10 @@ def config_to_name(config):
         config["mode"].replace("-", "_"),
         f"bs{config['batch_size']}",
         f"ctx{config['context_length']}",
-        f"warm{config['warmup_steps']}",
-        f"time{config['timed_steps']}",
+        # f"warm{config['warmup_steps']}",
+        # f"time{config['timed_steps']}",
         config["dtype"],
+        "mp" if config["mixed_precision"] else "no_mp",
         config["device"]
     ]
     return "_".join(parts)
@@ -84,7 +96,8 @@ def main() -> None:
             "warmup_steps":     args.warmup_steps,
             "timed_steps":      args.timed_steps,
             "dtype":            args.dtype,
-            "device":           args.device
+            "device":           args.device,
+            "mixed_precision":  args.mixed_precision
         }
 
         if args.profile:

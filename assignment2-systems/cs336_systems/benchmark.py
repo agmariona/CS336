@@ -4,6 +4,7 @@ import argparse
 from timeit import default_timer as timer
 from statistics import mean, stdev
 import json
+from contextlib import nullcontext
 
 import cs336_basics.model
 from cs336_basics.optimizer import AdamW
@@ -86,6 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", choices=["mps", "cuda"], default="cuda")
 
     parser.add_argument("--annotate-attention", action="store_true")
+    parser.add_argument("--mixed-precision", action="store_true")
 
     return parser.parse_args()
 
@@ -184,6 +186,18 @@ def main() -> None:
         cs336_basics.model.scaled_dot_product_attention = \
             annotated_scaled_dot_product_attention
 
+    if args.mixed_precision:
+        if args.device != 'cuda':
+            raise ValueError("Mixed precision (bf16) only supported on CUDA")
+        if args.dtype != 'float32':
+            raise ValueError("Mixed precision (bf16) expects fp32 model params")
+        precision_context = torch.autocast(
+            device_type="cuda",
+            dtype=torch.bfloat16
+        )
+    else:
+        precision_context = nullcontext()
+
     model = cs336_basics.model.TransformerLM(
         vocab_size      = DEFAULTS["vocab_size"],
         context_length  = args.context_length,
@@ -204,14 +218,15 @@ def main() -> None:
         weight_decay    = DEFAULTS["weight_decay"],
     )
 
-    time_mean, time_stdev = benchmark(
-        model           = model,
-        optimizer       = optimizer,
-        batch_size      = args.batch_size,
-        warmup_steps    = args.warmup_steps,
-        timed_steps     = args.timed_steps,
-        mode            = args.mode
-    )
+    with precision_context:
+        time_mean, time_stdev = benchmark(
+            model           = model,
+            optimizer       = optimizer,
+            batch_size      = args.batch_size,
+            warmup_steps    = args.warmup_steps,
+            timed_steps     = args.timed_steps,
+            mode            = args.mode
+        )
 
     record = {
         "time_mean":        time_mean,
