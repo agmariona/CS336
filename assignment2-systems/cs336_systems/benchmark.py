@@ -1,5 +1,5 @@
 import torch
-
+from pathlib import Path
 import argparse
 from timeit import default_timer as timer
 from statistics import mean, stdev
@@ -17,8 +17,7 @@ MODEL_CONFIGS = {
         "d_model": 768,
         "d_ff": 3072,
         "num_layers": 12,
-        "num_heads": 12
-    },
+        "num_heads": 12 },
     "medium": {
         "d_model": 1024,
         "d_ff": 4096,
@@ -89,6 +88,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--annotate-attention", action="store_true")
     parser.add_argument("--mixed-precision", action="store_true")
 
+    parser.add_argument("--profile-memory", action="store_true")
+    parser.add_argument("--memory-path",
+        default="results/memory/mem_profile.pickle"
+    )
+
     return parser.parse_args()
 
 
@@ -98,7 +102,9 @@ def benchmark(
     batch_size: int,
     warmup_steps: int,
     timed_steps: int,
-    mode: str
+    mode: str,
+    profile_memory: bool,
+    memory_path: str | None = None
 ) -> tuple[float, float]:
     # generate inputs
     inputs = torch.randint(
@@ -126,6 +132,10 @@ def benchmark(
 
     times = []
     sync()
+
+    if profile_memory:
+        torch.cuda.memory._record_memory_history(max_entries=1000000)
+
     if mode == 'fwd':
         for _ in range(timed_steps):
             with nvtx_range("timed_step"):
@@ -167,9 +177,14 @@ def benchmark(
                     optimizer.step()
                 sync()
                 times.append(timer() - t)
-
     else:
         raise ValueError(f"Unsupported benchmark mode: {mode}")
+
+    if profile_memory:
+        mpath = Path(memory_path)
+        mpath.parent.mkdir(parents=True, exist_ok=True)
+        torch.cuda.memory._dump_snapshot(memory_path)
+        torch.cuda.memory._record_memory_history(enabled=None)
 
     if timed_steps > 1:
         t_stdev = stdev(times)
@@ -198,6 +213,10 @@ def main() -> None:
     else:
         precision_context = nullcontext()
 
+    if args.profile_memory:
+        if args.device != 'cuda':
+            raise ValueError("Memory profiling only supported on CUDA")
+
     model = cs336_basics.model.TransformerLM(
         vocab_size      = DEFAULTS["vocab_size"],
         context_length  = args.context_length,
@@ -225,7 +244,9 @@ def main() -> None:
             batch_size      = args.batch_size,
             warmup_steps    = args.warmup_steps,
             timed_steps     = args.timed_steps,
-            mode            = args.mode
+            mode            = args.mode,
+            profile_memory  = args.profile_memory,
+            memory_path     = args.memory_path
         )
 
     record = {

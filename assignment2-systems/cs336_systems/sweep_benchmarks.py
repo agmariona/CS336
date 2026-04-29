@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-full-trace", action="store_true")
 
     parser.add_argument("--mixed-precision", action="store_true")
+    parser.add_argument("--profile-memory", action="store_true")
 
     return parser.parse_args()
 
@@ -67,9 +68,12 @@ def config_to_name(config):
         # f"time{config['timed_steps']}",
         config["dtype"],
         "mp" if config["mixed_precision"] else "no_mp",
-        config["device"]
+        # config["device"]
     ]
     return "_".join(parts)
+
+def config_to_mem_path(config):
+    return "results/memory/" + config_to_name(config) + ".pickle"
 
 def main() -> None:
     args = parse_args()
@@ -121,6 +125,12 @@ def main() -> None:
         else:
             cmd = [
                 "uv", "run", "python", "-m", "cs336_systems.benchmark"
+            ]
+
+        if args.profile_memory:
+            cmd += [
+                "--profile-memory",
+                "--memory-path", config_to_mem_path(config)
             ]
         cmd = cmd + config_to_args(config)
 
