@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from einops import reduce, einsum, rearrange
 from math import sqrt
 
@@ -383,10 +384,22 @@ class TransformerLM(nn.Module):
     def forward(
         self,
         x: torch.Tensor,    # [batch_size seq_len]
+        checkpoint_block_size: int | None = None
     ) -> torch.Tensor:      # [batch_size seq_len vocab_size]
         x = self.token_embeddings(x)
-        for layer in self.layers:
-            x = layer(x)
+        if checkpoint_block_size:
+            for start in range(0, len(self.layers), checkpoint_block_size):
+                chunk = self.layers[start : start + checkpoint_block_size]
+
+                def run_chunk(x, chunk=chunk):
+                    for layer in chunk:
+                        x = layer(x)
+                    return x
+
+                x = checkpoint(run_chunk, x, use_reentrant=False)
+        else:
+            for layer in self.layers:
+                x = layer(x)
         x = self.ln_final(x)
         x = self.lm_head(x)
         return x

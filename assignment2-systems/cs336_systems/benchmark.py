@@ -93,6 +93,8 @@ def parse_args() -> argparse.Namespace:
         default="results/memory/mem_profile.pickle"
     )
 
+    parser.add_argument("--checkpoint-block-size", type=int)
+
     return parser.parse_args()
 
 
@@ -104,7 +106,8 @@ def benchmark(
     timed_steps: int,
     mode: str,
     profile_memory: bool,
-    memory_path: str | None = None
+    memory_path: str | None = None,
+    checkpoint_block_size: int | None = None,
 ) -> tuple[float, float]:
     # generate inputs
     inputs = torch.randint(
@@ -125,7 +128,7 @@ def benchmark(
     with nvtx_range("warmup"):
         for _ in range(warmup_steps):
             optimizer.zero_grad()
-            logits = model(inputs)
+            logits = model(inputs, checkpoint_block_size)
             loss = cross_entropy(logits, inputs)
             loss.backward()
             optimizer.step()
@@ -142,7 +145,7 @@ def benchmark(
                 t = timer()
                 with nvtx_range("forward"):
                     with torch.no_grad():
-                        logits = model(inputs)
+                        logits = model(inputs, checkpoint_block_size)
                 sync()
                 times.append(timer() - t)
 
@@ -153,7 +156,7 @@ def benchmark(
                 with nvtx_range("zero_grad"):
                     optimizer.zero_grad()
                 with nvtx_range("forward"):
-                    logits = model(inputs)
+                    logits = model(inputs, checkpoint_block_size)
                 with nvtx_range("loss"):
                     loss = cross_entropy(logits, inputs)
                 with nvtx_range("backward"):
@@ -168,7 +171,7 @@ def benchmark(
                 with nvtx_range("zero_grad"):
                     optimizer.zero_grad()
                 with nvtx_range("forward"):
-                    logits = model(inputs)
+                    logits = model(inputs, checkpoint_block_size)
                 with nvtx_range("loss"):
                     loss = cross_entropy(logits, inputs)
                 with nvtx_range("backward"):
@@ -239,14 +242,15 @@ def main() -> None:
 
     with precision_context:
         time_mean, time_stdev = benchmark(
-            model           = model,
-            optimizer       = optimizer,
-            batch_size      = args.batch_size,
-            warmup_steps    = args.warmup_steps,
-            timed_steps     = args.timed_steps,
-            mode            = args.mode,
-            profile_memory  = args.profile_memory,
-            memory_path     = args.memory_path
+            model                   = model,
+            optimizer               = optimizer,
+            batch_size              = args.batch_size,
+            warmup_steps            = args.warmup_steps,
+            timed_steps             = args.timed_steps,
+            mode                    = args.mode,
+            profile_memory          = args.profile_memory,
+            memory_path             = args.memory_path,
+            checkpoint_block_size   = args.checkpoint_block_size
         )
 
     record = {

@@ -41,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-memory", action="store_true")
     parser.add_argument("--profile-cuda-memory", action="store_true")
 
+    parser.add_argument("--checkpoint-block-size", type=int)
+
     return parser.parse_args()
 
 BOOL_FLAGS = {
@@ -71,6 +73,9 @@ def config_to_name(config):
         "mp" if config["mixed_precision"] else "no_mp",
         # config["device"]
     ]
+    if "checkpoint_block_size" in config:
+        parts.append(f"chk{config['checkpoint_block_size']}")
+
     return "_".join(parts)
 
 def config_to_mem_path(config):
@@ -94,16 +99,18 @@ def main() -> None:
         args.context_lengths,
     ):
         config = {
-            "model_size":       model_size,
-            "mode":             mode,
-            "batch_size":       batch_size,
-            "context_length":   context_length,
-            "warmup_steps":     args.warmup_steps,
-            "timed_steps":      args.timed_steps,
-            "dtype":            args.dtype,
-            "device":           args.device,
-            "mixed_precision":  args.mixed_precision
+            "model_size":           model_size,
+            "mode":                 mode,
+            "batch_size":           batch_size,
+            "context_length":       context_length,
+            "warmup_steps":         args.warmup_steps,
+            "timed_steps":          args.timed_steps,
+            "dtype":                args.dtype,
+            "device":               args.device,
+            "mixed_precision":      args.mixed_precision
         }
+        if args.checkpoint_block_size:
+            config["checkpoint_block_size"] = args.checkpoint_block_size
 
         if args.profile:
             profile_path = profile_dir / config_to_name(config)
