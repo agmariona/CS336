@@ -21,6 +21,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out-path", default="results/attn_bench.json")
 
+    parser.add_argument("--compiled", action="store_true")
+
     return parser.parse_args()
 
 
@@ -30,7 +32,8 @@ def benchmark(
     d_model: int,
     n_warmup: int = 20,
     n_timed: int = 100,
-    device: str | torch.device = 'cuda'
+    device: str | torch.device = 'cuda',
+    compiled: bool = False,
 ) -> tuple[float, float, float, float, float]:
     Q = torch.randn(
         batch_size, context_length, d_model,
@@ -50,6 +53,11 @@ def benchmark(
             device=device, dtype=torch.bool
     ))
 
+    if compiled:
+        attn = torch.compile(scaled_dot_product_attention)
+    else:
+        attn = scaled_dot_product_attention
+
     # warm up
     torch.cuda.synchronize()
     for _ in range(n_warmup):
@@ -57,7 +65,7 @@ def benchmark(
         K.grad = None
         V.grad = None
 
-        out = scaled_dot_product_attention(Q, K, V, mask)
+        out = attn(Q, K, V, mask)
         loss = out.sum()
         loss.backward()
     torch.cuda.synchronize()
@@ -73,7 +81,7 @@ def benchmark(
         # forward pass
         torch.cuda.synchronize()
         t0 = timer()
-        out = scaled_dot_product_attention(Q, K, V, mask)
+        out = attn(Q, K, V, mask)
         torch.cuda.synchronize()
 
         fwd_times.append(timer() - t0)
@@ -109,7 +117,8 @@ def main() -> None:
             fwd_mean, fwd_stdev, bwd_mean, bwd_stdev, mem_alloc = benchmark(
                 batch_size      = args.batch_size,
                 context_length  = context_length,
-                d_model         = d_model
+                d_model         = d_model,
+                compiled        = args.compiled
             )
 
             record = {
@@ -121,7 +130,8 @@ def main() -> None:
                 "fwd_stdev_sec":    fwd_stdev,
                 "bwd_mean_sec":     bwd_mean,
                 "bwd_stdev_sec":    bwd_stdev,
-                "mem_alloc_mib":    mem_alloc / 1024**2
+                "mem_alloc_mib":    mem_alloc / 1024**2,
+                "compiled":         args.compiled
             }
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
@@ -130,10 +140,12 @@ def main() -> None:
                 "batch_size":       args.batch_size,
                 "context_length":   context_length,
                 "d_model":          d_model,
-                "oom":              True
+                "oom":              True,
+                "compiled":         args.compiled
             }
 
         records.append(record)
+        print(f'\t{context_length=} / {d_model=}')
 
     with out_path.open('w') as f:
         json.dump(records, f, indent=2)
