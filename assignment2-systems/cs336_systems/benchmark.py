@@ -95,11 +95,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--checkpoint-block-size", type=int)
 
+    parser.add_argument("--compiled", action="store_true")
+
     return parser.parse_args()
 
 
 def benchmark(
     model: torch.nn.Module,
+    base_model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     batch_size: int,
     warmup_steps: int,
@@ -112,12 +115,12 @@ def benchmark(
     # generate inputs
     inputs = torch.randint(
         low     = 0,
-        high    = model.vocab_size,
-        size    = (batch_size, model.context_length),
-        device  = model.device
+        high    = base_model.vocab_size,
+        size    = (batch_size, base_model.context_length),
+        device  = base_model.device
     )
 
-    device_type = torch.device(model.device).type
+    device_type = torch.device(base_model.device).type
     if device_type == "cuda":
         sync = torch.cuda.synchronize
     elif device_type == "mps":
@@ -128,7 +131,10 @@ def benchmark(
     with nvtx_range("warmup"):
         for _ in range(warmup_steps):
             optimizer.zero_grad()
-            logits = model(inputs, checkpoint_block_size)
+            logits = model(
+                inputs,
+                checkpoint_block_size=checkpoint_block_size
+            )
             loss = cross_entropy(logits, inputs)
             loss.backward()
             optimizer.step()
@@ -145,7 +151,10 @@ def benchmark(
                 t = timer()
                 with nvtx_range("forward"):
                     with torch.no_grad():
-                        logits = model(inputs, checkpoint_block_size)
+                        logits = model(
+                            inputs,
+                            checkpoint_block_size=checkpoint_block_size
+                        )
                 sync()
                 times.append(timer() - t)
 
@@ -156,7 +165,10 @@ def benchmark(
                 with nvtx_range("zero_grad"):
                     optimizer.zero_grad()
                 with nvtx_range("forward"):
-                    logits = model(inputs, checkpoint_block_size)
+                    logits = model(
+                        inputs,
+                        checkpoint_block_size=checkpoint_block_size
+                    )
                 with nvtx_range("loss"):
                     loss = cross_entropy(logits, inputs)
                 with nvtx_range("backward"):
@@ -171,7 +183,10 @@ def benchmark(
                 with nvtx_range("zero_grad"):
                     optimizer.zero_grad()
                 with nvtx_range("forward"):
-                    logits = model(inputs, checkpoint_block_size)
+                    logits = model(
+                        inputs,
+                        checkpoint_block_size=checkpoint_block_size
+                    )
                 with nvtx_range("loss"):
                     loss = cross_entropy(logits, inputs)
                 with nvtx_range("backward"):
@@ -220,7 +235,7 @@ def main() -> None:
         if args.device != 'cuda':
             raise ValueError("Memory profiling only supported on CUDA")
 
-    model = cs336_basics.model.TransformerLM(
+    base_model = cs336_basics.model.TransformerLM(
         vocab_size      = DEFAULTS["vocab_size"],
         context_length  = args.context_length,
         num_layers      = MODEL_CONFIGS[args.model_size]["num_layers"],
@@ -232,8 +247,13 @@ def main() -> None:
         dtype           = DTYPES[args.dtype]
     )
 
+    if args.compiled:
+        model = torch.compile(base_model)
+    else:
+        model = base_model
+
     optimizer = AdamW(
-        params          = model.parameters(),
+        params          = base_model.parameters(),
         lr              = DEFAULTS["lr"],
         betas           = DEFAULTS["betas"],
         eps             = DEFAULTS["eps"],
@@ -243,6 +263,7 @@ def main() -> None:
     with precision_context:
         time_mean, time_stdev = benchmark(
             model                   = model,
+            base_model              = base_model,
             optimizer               = optimizer,
             batch_size              = args.batch_size,
             warmup_steps            = args.warmup_steps,

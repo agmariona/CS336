@@ -43,10 +43,13 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--checkpoint-block-size", type=int)
 
+    parser.add_argument("--compiled", action="store_true")
+
     return parser.parse_args()
 
 BOOL_FLAGS = {
-    "mixed_precision"
+    "mixed_precision",
+    "compiled"
 }
 
 def config_to_args(config):
@@ -71,6 +74,7 @@ def config_to_name(config):
         # f"time{config['timed_steps']}",
         config["dtype"],
         "mp" if config["mixed_precision"] else "no_mp",
+        "compiled" if config["compiled"] else "uncompiled",
         # config["device"]
     ]
     if "checkpoint_block_size" in config:
@@ -107,7 +111,8 @@ def main() -> None:
             "timed_steps":          args.timed_steps,
             "dtype":                args.dtype,
             "device":               args.device,
-            "mixed_precision":      args.mixed_precision
+            "mixed_precision":      args.mixed_precision,
+            "compiled":             args.compiled
         }
         if args.checkpoint_block_size:
             config["checkpoint_block_size"] = args.checkpoint_block_size
