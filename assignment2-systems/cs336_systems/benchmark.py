@@ -129,15 +129,23 @@ def benchmark(
         raise ValueError(f"Unsupported device: {device_type}")
 
     with nvtx_range("warmup"):
-        for _ in range(warmup_steps):
-            optimizer.zero_grad()
-            logits = model(
-                inputs,
-                checkpoint_block_size=checkpoint_block_size
-            )
-            loss = cross_entropy(logits, inputs)
-            loss.backward()
-            optimizer.step()
+        if mode =='fwd':
+            for _ in range(warmup_steps):
+                with torch.no_grad():
+                    logits = model(
+                        inputs,
+                        checkpoint_block_size=checkpoint_block_size
+                    )
+        else:
+            for _ in range(warmup_steps):
+                optimizer.zero_grad()
+                logits = model(
+                    inputs,
+                    checkpoint_block_size=checkpoint_block_size
+                )
+                loss = cross_entropy(logits, inputs)
+                loss.backward()
+                optimizer.step()
 
     times = []
     sync()
