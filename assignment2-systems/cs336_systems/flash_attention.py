@@ -2,7 +2,7 @@ import torch
 import triton
 import triton.language as tl
 from einops import rearrange
-from math import ceil, sqrt, product
+from math import ceil, sqrt, prod
 
 class FlashAttention2(torch.autograd.Function):
 
@@ -122,7 +122,8 @@ def flash_fwd_kernel(
     scale,
     D: tl.constexpr,
     Q_TILE_SIZE: tl.constexpr,
-    K_TILE_SIZE: tl.constexpr
+    K_TILE_SIZE: tl.constexpr,
+    is_causal: tl.constexpr
 ):
     # identify thread block
     query_tile_index = tl.program_id(0)
@@ -197,6 +198,14 @@ def flash_fwd_kernel(
 
         S_tile = tl.dot(Q_tile, tl.trans(K_tile)) * scale
 
+        if is_causal:
+            global_q = query_tile_index * Q_TILE_SIZE + \
+                tl.arange(0, Q_TILE_SIZE)
+            global_k = key_tile_index * K_TILE_SIZE + \
+                tl.arange(0, K_TILE_SIZE)
+            mask_matrix = global_k[None, :] > global_q[:, None]
+            S_tile = tl.where(mask_matrix, -1e6, S_tile)
+
         S_rowmax = tl.max(S_tile, axis=-1)
         m_tile_prev = m_tile
         m_tile = tl.maximum(m_tile, S_rowmax)
@@ -222,7 +231,7 @@ def flash_fwd_kernel(
 
 class FlashAttention2_Triton(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, Q, K, V, is_causal):
+    def forward(ctx, Q, K, V, is_causal=False):
         if not (Q.is_cuda and K.is_cuda and V.is_cuda):
             raise ValueError("Expected CUDA tensors")
 
@@ -233,7 +242,7 @@ class FlashAttention2_Triton(torch.autograd.Function):
         Nk, dk = K.shape[-2:]
         Nv, dv = V.shape[-2:]
         batch_dims = Q.shape[:-2]
-        n_batch = product(batch_dims)
+        n_batch = prod(batch_dims)
 
         if not (dq == dk == dv):
             raise ValueError("Feature dimension mismatch")
@@ -250,6 +259,7 @@ class FlashAttention2_Triton(torch.autograd.Function):
         ctx.N_KEYS = Nk
         ctx.D = dq
         ctx.BATCH_DIMS = batch_dims
+        ctx.is_causal = is_causal
 
         O = torch.empty_like(Q)
         L = Q.new_empty((*batch_dims, Nq))
@@ -261,7 +271,7 @@ class FlashAttention2_Triton(torch.autograd.Function):
         L_b = rearrange(L, "... Nq -> (...) Nq")
 
         flash_fwd_kernel[
-            (triton.cdiv(Nq, ctx.Q_TILE_SIZE), product(batch_dims))
+            (triton.cdiv(Nq, ctx.Q_TILE_SIZE), n_batch)
         ](
             Q_b, K_b, V_b, O_b, L_b,
             Q_b.stride(0), Q_b.stride(1), Q_b.stride(2),
@@ -273,7 +283,8 @@ class FlashAttention2_Triton(torch.autograd.Function):
             1 / sqrt(ctx.D),
             ctx.D,
             ctx.Q_TILE_SIZE,
-            ctx.K_TILE_SIZE
+            ctx.K_TILE_SIZE,
+            ctx.is_causal
         )
 
         ctx.save_for_backward(L, Q, K, V, O)

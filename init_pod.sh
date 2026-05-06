@@ -68,5 +68,5 @@ uv run python -c "import cs336_basics, cs336_systems; print('imports ok')"
 echo "==> Done"
 echo "Repo: $WORKDIR/$REPO_DIR"
 
+export PATH="$HOME/.local/bin:$PATH"
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
