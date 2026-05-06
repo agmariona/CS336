@@ -1,4 +1,6 @@
 import torch
+import triton
+import triton.language as tl
 from einops import rearrange
 from math import ceil, sqrt
 
@@ -56,7 +58,7 @@ class FlashAttention2(torch.autograd.Function):
         O = torch.zeros_like(Q)
         L = Q.new_zeros((*bsz, Nq))
 
-        # computation is batched; final two dimensions are annotated
+        # computation is batched; annotated are the final two dimensions
         # outer loop over query tiles
         for i in range(Tq):
             Qtile = Q[..., i*Bq : (i+1)*Bq, :]                  # [Bq d]
@@ -83,16 +85,16 @@ class FlashAttention2(torch.autograd.Function):
                     -1
                 )
 
-                Ptile = torch.exp(Stile - m[..., :, None])      # [Bq Bk]
+                Ptile = torch.exp(Stile - m[..., None])        # [Bq Bk]
 
                 P_rowsum = torch.sum(Ptile, -1)                 # [Bq]
                 l = torch.exp(m_prev - m) * l + P_rowsum        # [Bq]
 
                 exp_m = torch.exp(m_prev - m)                   # [Bq]
-                Otile = Otile * exp_m[..., :, None] \
+                Otile = Otile * exp_m[..., None] \
                     + Ptile @ Vtile                             # [Bq d]
 
-            Otile = Otile / l[..., :, None]                     # [Bq d]
+            Otile = Otile / l[...,  None]                       # [Bq d]
             O[..., i*Bq : (i+1)*Bq, :] = Otile                  # [Bq d]
 
             Ltile = m + torch.log(l)                            # [Bq]
@@ -105,3 +107,31 @@ class FlashAttention2(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         raise NotImplementedError
+
+
+@triton.jit
+def flash_fwd_kernel(
+    Q_ptr, K_ptr, V_ptr,
+    O_ptr, L_ptr,
+    stride_qb, stride_qq, stride_qd,
+    stride_kb, stride_kk, stride_kd,
+    stride_vb, stride_vk, stride_vd,
+    stride_ob, stride_oq, stride_od,
+    stride_lb, stride_lq,
+    N_QUERIES, N_KEYS,
+    scale,
+    D: tl.constexpr,
+    Q_TILE_SIZE: tl.constexpr,
+    K_TILE_SIZE: tl.constexpr
+):
+    query_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(1)
+
+    Q_block_ptr = tl.make_block_ptr(
+        Q_ptr + batch_index * stride_qb,
+        shape=(N_QUERIES, D),
+        strides=(stride_qq, stride_qd),
+        offsets=(query_tile_index * Q_TILE_SIZE, 0),
+        block_shape=(Q_TILE_SIZE, D),
+        order=(1, 0)
+    )
