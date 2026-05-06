@@ -236,6 +236,14 @@ def flash_fwd_kernel(
     tl.store(L_block_ptr, L_tile, boundary_check=(0,))
 
 def flash_attn_backward(dO, Q, K, V, O, L, is_causal):
+    in_type = Q.dtype
+    Q = Q.to(torch.float32)
+    K = K.to(torch.float32)
+    V = V.to(torch.float32)
+    O = O.to(torch.float32)
+    dO = dO.to(torch.float32)
+    L = L.to(torch.float32)
+
     Nq, d = Q.shape[-2:]
     Nk = K.shape[-2]
     scale = 1 / sqrt(d)
@@ -255,6 +263,10 @@ def flash_attn_backward(dO, Q, K, V, O, L, is_causal):
     dS = P * (dP - D[..., None])
     dQ = einsum(dS, K, "... Nq Nk, ... Nk d -> ... Nq d") * scale
     dK = einsum(dS, Q, "... Nq Nk, ... Nq d -> ... Nk d") * scale
+
+    dQ = dQ.to(in_type)
+    dK = dK.to(in_type)
+    dV = dV.to(in_type)
 
     return dQ, dK, dV
 
