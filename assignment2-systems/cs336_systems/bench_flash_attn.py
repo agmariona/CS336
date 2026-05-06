@@ -152,6 +152,8 @@ def main():
     )
     records = []
 
+    torch.set_float32_matmul_precision("high")
+
     for sequence_length, d_model, dtype in param_grid:
         for algorithm, benchmark_fn in BENCHMARKS.items():
             try:
@@ -167,9 +169,11 @@ def main():
                     times_ms, oom=False
                 )
                 print(
-                    f"\t{algorithm} / "
-                    f"{sequence_length=} / {d_model=} / {dtype=} / "
-                    f"all_mean_time={times_ms[1]}ms"
+                    f"\t{algorithm:<7} / "
+                    f"sequence_length={sequence_length:<5} / "
+                    f"d_model={d_model:<3} / "
+                    f"dtype={dtype:<8} / "
+                    f"all_mean_time={times_ms[1]:>9.3f}ms"
                 )
 
             except torch.cuda.OutOfMemoryError:
@@ -181,8 +185,11 @@ def main():
                     oom=True
                 )
                 print(
-                    f"\t{algorithm} / "
-                    f"{sequence_length=} / {d_model=} / {dtype=} / OOM"
+                    f"\t{algorithm:<7} / "
+                    f"sequence_length={sequence_length:<5} / "
+                    f"d_model={d_model:<3} / "
+                    f"dtype={dtype:<8} / "
+                    f"OOM"
                 )
 
             records.append(record)
