@@ -230,6 +230,8 @@ def flash_fwd_kernel(
     O_tile = O_tile / l_tile[:, None]
     L_tile = m_tile + tl.log(l_tile)
 
+    O_tile = O_tile.to(O_block_ptr.type.element_ty.element_ty)
+
     tl.store(O_block_ptr, O_tile, boundary_check=(0, 1))
     tl.store(L_block_ptr, L_tile, boundary_check=(0,))
 
@@ -291,7 +293,11 @@ class FlashAttention2_Triton(torch.autograd.Function):
         ctx.is_causal = is_causal
 
         O = torch.empty_like(Q)
-        L = Q.new_empty((*batch_dims, Nq))
+        L = torch.empty(
+            (*batch_dims, Nq),
+            device=Q.device,
+            dtype=torch.float32
+        )
 
         Q_b = rearrange(Q, "... Nq d -> (...) Nq d")
         K_b = rearrange(K, "... Nk d -> (...) Nk d")
