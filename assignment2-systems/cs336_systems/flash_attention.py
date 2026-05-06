@@ -1,7 +1,7 @@
 import torch
 import triton
 import triton.language as tl
-from einops import rearrange
+from einops import rearrange, einsum
 from math import ceil, sqrt, prod
 
 class FlashAttention2(torch.autograd.Function):
@@ -101,12 +101,17 @@ class FlashAttention2(torch.autograd.Function):
             L[..., i*Bq : (i+1)*Bq] = Ltile                     # [Bq]
 
         ctx.save_for_backward(L, Q, K, V, O)
+        ctx.is_causal = is_causal
+
         return O
 
-
     @staticmethod
-    def backward(ctx, grad_output):
-        raise NotImplementedError
+    def backward(ctx, dO):
+        L, Q, K, V, O = ctx.saved_tensors
+        is_causal = ctx.is_causal
+        dQ, dK, dV = flash_attn_backward_compiled(dO, Q, K, V, O, L, is_causal)
+
+        return dQ, dK, dV, None
 
 
 @triton.jit
@@ -228,6 +233,30 @@ def flash_fwd_kernel(
     tl.store(O_block_ptr, O_tile, boundary_check=(0, 1))
     tl.store(L_block_ptr, L_tile, boundary_check=(0,))
 
+def flash_attn_backward(dO, Q, K, V, O, L, is_causal):
+    Nq, d = Q.shape[-2:]
+    Nk = K.shape[-2]
+    scale = 1 / sqrt(d)
+
+    D = torch.sum(O * dO, axis=-1)
+    S = einsum(Q, K, "... Nq d, ... Nk d -> ... Nq Nk") * scale
+
+    if is_causal:
+        q_idx = torch.arange(Nq, device=Q.device)
+        k_idx = torch.arange(Nk, device=K.device)
+        mask = k_idx[None, :] > q_idx[:, None]
+        S = torch.where(mask, -1e6, S)
+
+    P = torch.exp(S - L[..., None])
+    dV = einsum(P, dO, "... Nq Nk, ... Nq d -> ... Nk d")
+    dP = einsum(dO, V, "... Nq d, ... Nk d -> ... Nq Nk")
+    dS = P * (dP - D[..., None])
+    dQ = einsum(dS, K, "... Nq Nk, ... Nk d -> ... Nq d") * scale
+    dK = einsum(dS, Q, "... Nq Nk, ... Nq d -> ... Nk d") * scale
+
+    return dQ, dK, dV
+
+flash_attn_backward_compiled = torch.compile(flash_attn_backward)
 
 class FlashAttention2_Triton(torch.autograd.Function):
     @staticmethod
@@ -292,5 +321,10 @@ class FlashAttention2_Triton(torch.autograd.Function):
         return O
 
     @staticmethod
-    def backward(ctx, grad_output):
-        raise NotImplementedError
+    def backward(ctx, dO):
+        L, Q, K, V, O = ctx.saved_tensors
+        is_causal = ctx.is_causal
+        dQ, dK, dV = flash_attn_backward_compiled(dO, Q, K, V, O, L, is_causal)
+
+        return dQ, dK, dV, None
+
