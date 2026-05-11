@@ -348,7 +348,7 @@ class TransformerLM(nn.Module):
         d_model: int,
         num_heads: int,
         d_ff: int,
-        rope_theta: float,
+        rope_theta: float = 10000,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:

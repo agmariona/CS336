@@ -9,6 +9,8 @@ import time
 import json
 from statistics import mean
 
+from .parallelism import setup
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -39,22 +41,6 @@ def make_record(
     }
 
     return record
-
-
-def setup(rank, world_size, backend):
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29500"
-
-    device = get_device(rank, backend)
-    if str(device).startswith("cuda"):
-        torch.cuda.set_device(rank)
-
-    if backend == "gloo":
-        os.environ.setdefault("GLOO_SOCKET_IFNAME", "lo0")
-
-    dist.init_process_group(backend, rank=rank, world_size=world_size)
-
-    return device
 
 
 def benchmark_worker(
