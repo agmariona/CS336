@@ -21,6 +21,11 @@ class NaiveDDP(torch.nn.Module):
                     group=self.process_group
                 )
 
+    # for test compatibility
+    @property
+    def module(self):
+        return self.model
+
     def forward(self, x: torch.Tensor):
         return self.model(x)
 
@@ -54,6 +59,11 @@ class FlatDDP(torch.nn.Module):
                     src=0,
                     group=self.process_group
                 )
+
+    # for test compatibility
+    @property
+    def module(self):
+        return self.model
 
     def forward(self, x: torch.Tensor):
         return self.model(x)
@@ -115,6 +125,11 @@ class OverlappedDDP(torch.nn.Module):
                     src=0,
                     group=self.process_group
                 )
+
+    # for test compatibility
+    @property
+    def module(self):
+        return self.model
 
     def forward(self, x: torch.Tensor):
         return self.model(x)
