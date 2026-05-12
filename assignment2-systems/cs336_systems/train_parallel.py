@@ -9,8 +9,7 @@ from cs336_basics.optimizer import AdamW
 from cs336_basics.nn_utils import cross_entropy
 
 from .toy_model import ToyModel
-from .parallelism import NaiveDDP, ParallelStrategy, NaiveDDPStrategy, \
-    SingleStrategy
+from .parallelism import NaiveDDP, DDPStrategy, SingleStrategy, STRATEGIES
 
 
 MODEL_CONFIGS = {
@@ -60,16 +59,12 @@ MODEL_CLS = {
 TLM_VOCAB_SIZE = 10000
 TLM_CONTEXT_LENGTH = 512
 
-STRATEGIES: dict[str, ParallelStrategy] = {
-    "naive-ddp": NaiveDDPStrategy()
-}
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--parallelism", required=True,
-        choices=["naive-ddp"],
+        choices=["naive-ddp", "flat-ddp", "overlapped-ddp"],
     )
     parser.add_argument("--model-class", default="ToyModel",
         choices=["ToyModel", "TransformerLM"]

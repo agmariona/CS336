@@ -1,6 +1,6 @@
 import torch
 import torch.distributed as dist
-from typing import Protocol
+
 
 class NaiveDDP(torch.nn.Module):
     def __init__(
@@ -21,10 +21,8 @@ class NaiveDDP(torch.nn.Module):
                     group=self.process_group
                 )
 
-
     def forward(self, x: torch.Tensor):
         return self.model(x)
-
 
     def sync_gradients(self):
         with torch.no_grad():
@@ -38,41 +36,118 @@ class NaiveDDP(torch.nn.Module):
                     param.grad /= self.world_size
 
 
-class ParallelStrategy(Protocol):
-    is_distributed: bool
-
-    def wrap_model(self, model: torch.nn.Module) -> torch.nn.Module:
-        ...
-
-    def shard_data(
-        self,
-        device: str,
-        rank: int,
-        world_size: int,
-        inputs: torch.Tensor,
-        targets: torch.Tensor | None
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        ...
-
-    def after_backward(
+class FlatDDP(torch.nn.Module):
+    def __init__(
         self,
         model: torch.nn.Module,
-        optimizer: torch.optim.Optimizer
+        process_group: dist.ProcessGroup | None = None
     ):
-        ...
+        super().__init__()
+        self.model = model
+        self.world_size = dist.get_world_size(process_group)
+        self.process_group = process_group
 
-    def full_state_dict(
+        with torch.no_grad():
+            for param in self.model.parameters():
+                dist.broadcast(
+                    param,
+                    src=0,
+                    group=self.process_group
+                )
+
+    def forward(self, x: torch.Tensor):
+        return self.model(x)
+
+    def sync_gradients(self):
+        with torch.no_grad():
+            grads = []
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    grads.append(param.grad)
+
+            if not grads:
+                return
+
+            flat_grads = torch._utils._flatten_dense_tensors(grads)
+
+            dist.all_reduce(
+                tensor=flat_grads,
+                op=dist.ReduceOp.SUM,
+                group=self.process_group
+            )
+            flat_grads /= self.world_size
+
+            synced_grads = torch._utils._unflatten_dense_tensors(
+                flat_grads, grads
+            )
+
+            for (grad, synced_grad) in zip(grads, synced_grads):
+                grad.copy_(synced_grad)
+
+
+class OverlappedDDP(torch.nn.Module):
+    def __init__(
         self,
-        model: torch.nn.Module
-    ) -> dict[str, torch.Tensor]:
-        ...
+        model: torch.nn.Module,
+        process_group: dist.ProcessGroup | None = None
+    ):
+        super().__init__()
+        self.model = model
+        self.world_size = dist.get_world_size(process_group)
+        self.process_group = process_group
+
+        self.hooks = []         # for gradient accumulation
+        self.comm_handles = []  # for all-reduce
 
 
-class NaiveDDPStrategy:
+        for param in self.model.parameters():
+            # add hook for overlapped communication
+            if param.requires_grad:
+                h = param.register_post_accumulate_grad_hook(
+                    self._sync_grad
+                )
+                self.hooks.append(h)
+
+            # synchronize initial values
+            with torch.no_grad():
+                dist.broadcast(
+                    param,
+                    src=0,
+                    group=self.process_group
+                )
+
+    def forward(self, x: torch.Tensor):
+        return self.model(x)
+
+    def _sync_grad(self, param: torch.Tensor) -> None:
+        with torch.no_grad():
+            if param.grad is not None:
+                param.grad /= self.world_size
+                h = dist.all_reduce(
+                    tensor=param.grad,
+                    op=dist.ReduceOp.SUM,
+                    group=self.process_group,
+                    async_op=True
+                )
+                self.comm_handles.append(h)
+
+    def finish_gradient_synchronization(self):
+        for h in self.comm_handles:
+            h.wait()
+        self.comm_handles.clear()
+
+    def sync_gradients(self):
+        self.finish_gradient_synchronization()
+
+
+class DDPStrategy:
     is_distributed = True
 
+    def __init__(self, wrapper_cls: type[torch.nn.Module]):
+        self.wrapper_cls = wrapper_cls
+
     def wrap_model(self, model: torch.nn.Module) -> torch.nn.Module:
-        return NaiveDDP(model)
+        return self.wrapper_cls(model)
 
     def shard_data(
         self,
@@ -89,16 +164,16 @@ class NaiveDDPStrategy:
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer
     ):
-        if not isinstance(model, NaiveDDP):
-            raise TypeError("Expected a NaiveDDP model")
+        if not isinstance(model, self.wrapper_cls):
+            raise TypeError(f"Expected a {self.wrapper_cls.__name__} model")
         model.sync_gradients()
 
     def full_state_dict(
         self,
         model: torch.nn.Module
     ) -> dict[str, torch.Tensor]:
-        if not isinstance(model, NaiveDDP):
-            raise TypeError("Expected a NaiveDDP model")
+        if not isinstance(model, self.wrapper_cls):
+            raise TypeError(f"Expected a {self.wrapper_cls.__name__} model")
         return detach(model.model.state_dict())
 
 class SingleStrategy:
@@ -164,3 +239,11 @@ def shard_batch(
         local_targets = None
 
     return local_inputs, local_targets
+
+
+STRATEGIES = {
+    "naive-ddp": DDPStrategy(NaiveDDP),
+    "flat-ddp": DDPStrategy(FlatDDP),
+    "overlapped-ddp": DDPStrategy(OverlappedDDP)
+}
+

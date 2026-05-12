@@ -9,7 +9,7 @@ import time
 import json
 from statistics import mean
 
-from .parallelism import setup
+from .train_parallel import setup
 
 
 def parse_args() -> argparse.Namespace:
