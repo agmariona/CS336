@@ -54,7 +54,7 @@ def run_benchmark(
         optimizer = AdamW(train_model.parameters())
 
         inputs, targets = generate_data(
-            model_class, model_config, batch_size=16
+            model_class, model_config, batch_size=4
         )
         inputs = inputs.to(device)
         if targets is not None:
