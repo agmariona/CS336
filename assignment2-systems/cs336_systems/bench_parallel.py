@@ -4,6 +4,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import time
+from contextlib import nullcontext
 
 from cs336_basics.model import TransformerLM
 from cs336_basics.optimizer import AdamW
@@ -112,19 +113,21 @@ def timed_train_one_step(
     optimizer.zero_grad()
     out = model(inputs)
     loss = compute_loss(out, targets)
-    loss.backward()
+
+    with nvtx_range(device, 'backward'):
+        loss.backward()
 
     # communications
-    synchronize_if_cuda(device)
     comm_start = time.perf_counter()
-
-    strategy.after_backward(model, optimizer)
+    with nvtx_range(device, 'after_backward'):
+        strategy.after_backward(model, optimizer)
 
     synchronize_if_cuda(device)
     comm_end = time.perf_counter()
 
     # optimizer
-    optimizer.step()
+    with nvtx_range(device, 'optimizer'):
+        optimizer.step()
 
     synchronize_if_cuda(device)
     total_end = time.perf_counter()
@@ -135,6 +138,12 @@ def timed_train_one_step(
     ]
 
     return torch.tensor(times, device=device)
+
+
+def nvtx_range(device: str, name: str):
+    if device.startswith('cuda'):
+        return torch.cuda.nvtx.range(name)
+    return nullcontext()
 
 
 def synchronize_if_cuda(device: str):
