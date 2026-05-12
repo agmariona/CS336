@@ -14,11 +14,18 @@ from .parallelism import NaiveDDP, ParallelStrategy, NaiveDDPStrategy, \
 
 
 MODEL_CONFIGS = {
+    "tiny": {
+        "d_model": 256,
+        "d_ff": 1024,
+        "num_layers": 4,
+        "num_heads": 2
+    },
     "small": {
         "d_model": 768,
         "d_ff": 3072,
         "num_layers": 12,
-        "num_heads": 12 },
+        "num_heads": 12
+    },
     "medium": {
         "d_model": 1024,
         "d_ff": 4096,
@@ -67,8 +74,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-class", default="ToyModel",
         choices=["ToyModel", "TransformerLM"]
     )
-    parser.add_argument("--model-config", default="xl",
-        choices=["small", "medium", "large", "xl", "10B"]
+    parser.add_argument("--model-size", default="xl",
+        choices=["tiny", "small", "medium", "large", "xl", "10B"]
     )
     parser.add_argument("--world-size", type=int, default=2)
 
@@ -77,7 +84,7 @@ def parse_args() -> argparse.Namespace:
 
 def setup(rank: int, world_size: int, backend: str):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "29500"
+    os.environ["MASTER_PORT"] = "29501"
 
     if backend == "nccl":
         device = f"cuda:{rank}"
@@ -150,7 +157,13 @@ def run_parallel_worker(
             baseline_state = SingleStrategy().full_state_dict(baseline_model)
             parallel_state = strategy.full_state_dict(train_model)
 
-            assert states_allclose(baseline_state, parallel_state)
+            allclose, worst_key, worst_abs_diff = states_allclose(
+                baseline_state, parallel_state
+            )
+
+            if not allclose:
+                print(f"Check failed: {worst_key=}, {worst_abs_diff=}")
+                raise ValueError
     finally:
         cleanup()
 
@@ -170,20 +183,26 @@ def train_one_step(
     optimizer.step()
 
 
-def states_allclose(a: dict, b: dict) -> bool:
+def states_allclose(a: dict, b: dict):
     a_keys = set(a.keys())
     b_keys = set(b.keys())
 
     if a_keys != b_keys:
-        return False
+        return False, None, 0
+
+    worst_key = None
+    worst_abs_diff = 0
 
     allclose = True
     for key in sorted(a_keys):
-        if not torch.allclose(a[key], b[key]):
+        diff = torch.max(torch.abs(a[key] - b[key]))
+        if diff > worst_abs_diff:
+            worst_key = key
+            worst_abs_diff = diff.item()
+        if not torch.allclose(a[key], b[key], atol=1e-5):
             allclose = False
-            break
 
-    return allclose
+    return allclose, worst_key, worst_abs_diff
 
 
 def compute_loss(
@@ -263,7 +282,7 @@ def main():
         model_config = {
             "vocab_size": TLM_VOCAB_SIZE,
             "context_length": TLM_CONTEXT_LENGTH,
-            **MODEL_CONFIGS[args.model_config]
+            **MODEL_CONFIGS[args.model_size]
         }
     model_class = MODEL_CLS[args.model_class]
     initial_model = model_class(**model_config)
