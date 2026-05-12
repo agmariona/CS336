@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
         choices=["tiny", "small", "medium", "large", "xl", "10B"]
     )
     parser.add_argument("--world-size", type=int, default=2)
+    parser.add_argument("--local-batch-size", type=int, default=2)
 
     return parser.parse_args()
 
@@ -40,6 +41,7 @@ def run_benchmark(
     model_class: str,
     model_config: dict,
     backend: str,
+    local_batch_size: int = 2,
     n_warmup: int = 10,
     n_timed: int = 10
 ):
@@ -54,7 +56,7 @@ def run_benchmark(
         optimizer = AdamW(train_model.parameters())
 
         inputs, targets = generate_data(
-            model_class, model_config, batch_size=4
+            model_class, model_config, batch_size=local_batch_size
         )
         inputs = inputs.to(device)
         if targets is not None:
@@ -165,7 +167,8 @@ def main():
             args.parallelism,
             args.model_class,
             model_config,
-            backend
+            backend,
+            args.local_batch_size
         ),
         nprocs=args.world_size,
         join=True
