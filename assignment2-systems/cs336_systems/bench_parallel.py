@@ -72,11 +72,12 @@ def run_benchmark(
 
         times = torch.empty((n_timed, 2), device=device)
         for i in range(n_timed):
-            time_entry = timed_train_one_step(
-                strategy, device,
-                train_model, optimizer,
-                inputs, targets
-            )
+            with nvtx_range(device, "timed_train_one_step"):
+                time_entry = timed_train_one_step(
+                    strategy, device,
+                    train_model, optimizer,
+                    inputs, targets
+                )
 
             times[i,:] = time_entry
 

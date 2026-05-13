@@ -1,6 +1,9 @@
 import torch
 import torch.distributed as dist
 
+# =============================================================================
+# Data Parallelism
+# =============================================================================
 
 class NaiveDDP(torch.nn.Module):
     def __init__(
@@ -108,7 +111,6 @@ class OverlappedDDP(torch.nn.Module):
 
         self.hooks = []         # for gradient accumulation
         self.comm_handles = []  # for all-reduce
-
 
         for param in self.model.parameters():
             # add hook for overlapped communication
@@ -262,3 +264,40 @@ STRATEGIES = {
     "overlapped-ddp": DDPStrategy(OverlappedDDP)
 }
 
+# =============================================================================
+# Optimizer Sharding
+# =============================================================================
+
+# class ShardedOptimizer(torch.optim.Optimizer):
+#     def __init__(
+#         self,
+#         params,
+#         optimizer_cls: Type[Optimizer],
+#         **kwargs: Any
+#     ):
+#         super().__init__(params)
+#
+#         self.rank = dist.get_rank()
+#         self.world_size = dist.get_world_size()
+#
+#         self.local_params = [
+#             p for i, p in enumerate(all_params)
+#             if i % self.world_size == self.rank
+#         ]
+#
+#
+#         self.optimizer = optimizer_cls(self.local_params, **kwargs)
+#
+#
+#     def step(self, closure, **kwargs):
+#         loss = None if closure is None else closure()
+#
+#     def add_param_group(self, param_group: dict[str, Any]):
+#         self.rank = dist.get_rank()
+#         self.world_size = dist.get_world_size()
+#         self.param_groups.append(param_group)
+#
+#         self.local_params = {
+#             k: v for i, k, v in enumerate(param_group)
+#             if i % self.world_size == self.rank
+#         }
