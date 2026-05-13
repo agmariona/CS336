@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+from typing import Any
 
 # =============================================================================
 # Data Parallelism
@@ -268,36 +269,64 @@ STRATEGIES = {
 # Optimizer Sharding
 # =============================================================================
 
-# class ShardedOptimizer(torch.optim.Optimizer):
-#     def __init__(
-#         self,
-#         params,
-#         optimizer_cls: Type[Optimizer],
-#         **kwargs: Any
-#     ):
-#         super().__init__(params)
-#
-#         self.rank = dist.get_rank()
-#         self.world_size = dist.get_world_size()
-#
-#         self.local_params = [
-#             p for i, p in enumerate(all_params)
-#             if i % self.world_size == self.rank
-#         ]
-#
-#
-#         self.optimizer = optimizer_cls(self.local_params, **kwargs)
-#
-#
-#     def step(self, closure, **kwargs):
-#         loss = None if closure is None else closure()
-#
-#     def add_param_group(self, param_group: dict[str, Any]):
-#         self.rank = dist.get_rank()
-#         self.world_size = dist.get_world_size()
-#         self.param_groups.append(param_group)
-#
-#         self.local_params = {
-#             k: v for i, k, v in enumerate(param_group)
-#             if i % self.world_size == self.rank
-#         }
+class ShardedOptimizer(torch.optim.Optimizer):
+    def __init__(
+        self,
+        params,
+        optimizer_cls: type[torch.optim.Optimizer],
+        **kwargs: Any
+    ):
+        self.rank = dist.get_rank()
+        self.world_size = dist.get_world_size()
+        self.n_params = 0
+
+        self.global_params = []
+        self.local_param_groups = []
+        self.optimizer = None
+
+        super().__init__(params, kwargs)
+        self.optimizer = optimizer_cls(self.local_param_groups, **kwargs)
+
+    def step(self, closure=None, **kwargs):
+        loss = self.optimizer.step(closure, **kwargs)
+
+        with torch.no_grad():
+            for i, param in enumerate(self.global_params):
+                owner = i % self.world_size
+                dist.broadcast(param, src=owner)
+
+        return loss
+
+    def add_param_group(self, param_group: dict[str, Any]):
+        raw = param_group["params"]
+        if isinstance(raw, torch.Tensor):
+            params = [raw]
+        else:
+            params = list(raw)
+
+        self.global_params.extend(params)
+
+        local_params = [
+            p for i, p in enumerate(params)
+            if (self.n_params + i) % self.world_size == self.rank
+        ]
+        self.n_params = self.n_params + len(params)
+
+        if local_params:
+            local_group = {
+                k: param_group[k] for k in param_group if k != "params"
+            }
+            local_group["params"] = local_params
+
+            self.local_param_groups.append(local_group)
+            if self.optimizer is not None:
+                self.optimizer.add_param_group(local_group)
+
+    def zero_grad(self, set_to_none=True):
+        for param in self.global_params:
+            if param.grad is not None:
+                if set_to_none:
+                    param.grad = None
+                else:
+                    param.grad.detach_()
+                    param.grad.zero_()
