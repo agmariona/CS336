@@ -1,6 +1,10 @@
 import torch
 import torch.distributed as dist
 from typing import Any
+from dataclasses import dataclass
+import math
+
+from cs336_basics.model import Linear, Embedding
 
 # =============================================================================
 # Data Parallelism
@@ -253,8 +257,8 @@ def shard_batch(
     local_inputs = inputs[start_idx : end_idx].to(device)
     if targets is not None:
         local_targets = targets[start_idx : end_idx].to(device)
-    else:
-        local_targets = None
+    else: local_targets = None
+
 
     return local_inputs, local_targets
 
@@ -265,6 +269,116 @@ STRATEGIES = {
     "overlapped-ddp": DDPStrategy(OverlappedDDP),
     "single": SingleStrategy(),
 }
+
+# =============================================================================
+# Fully-Sharded Data Parallel
+# =============================================================================
+
+@dataclass
+class ShardedParamRecord:
+    module: torch.nn.Module
+    param_name: str
+    full_shape: torch.Size
+    full_dtype: torch.dtype
+    start_idx: int
+    end_idx: int
+    local_shard: torch.nn.Parameter
+    shard_lens: list[int]
+
+class FullyShardedDataParallel(torch.nn.Module):
+    def __init__(
+        self,
+        module: torch.nn.Module,
+        compute_dtype: torch.dtype | None = None
+    ):
+        super().__init__()
+
+        self.rank = dist.get_rank()
+        self.world_size = dist.get_world_size()
+
+        self.module = module
+        self.shard_records = []
+        self.compute_dtype = compute_dtype
+
+        # shard Linear and Embedding layers
+        for module_name, mod in self.module.named_modules():
+            if isinstance(mod, (Linear, Embedding)):
+                weight = mod.weight
+                full_shape = weight.shape
+                full_dtype = weight.dtype
+                weight = weight.flatten()
+
+                numel = weight.numel()
+                base = numel // self.world_size
+                remainder = numel % self.world_size
+                shard_lens = [
+                    base + 1 if r < remainder else base
+                    for r in range(self.world_size)
+                ]
+
+                start_idx = self.rank * base + min(self.rank, remainder)
+                end_idx = start_idx + base
+                if self.rank < remainder:
+                    end_idx += 1
+                weight_slice = weight[start_idx:end_idx].detach().clone()
+                weight_shard = torch.nn.Parameter(weight_slice)
+
+                # local module only sees shard
+                mod.weight = weight_shard
+
+                record = ShardedParamRecord(
+                    module=mod,
+                    param_name="weight",
+                    full_shape=full_shape,
+                    full_dtype=full_dtype,
+                    start_idx=start_idx,
+                    end_idx=end_idx,
+                    local_shard=weight_shard,
+                    shard_lens=shard_lens
+                )
+                self.shard_records.append(record)
+
+        for record in self.shard_records:
+            record.module.register_forward_pre_hook(
+                self._make_forward_pre_hook(record)
+            )
+
+    def _make_forward_pre_hook(self, record):
+        def hook(module, inputs):
+            if self.compute_dtype is not None:
+                comm_dtype = self.compute_dtype
+            else:
+                comm_dtype = record.local_shard.dtype
+
+            gathered_weights = [
+                torch.empty(
+                    record.shard_lens[r],
+                    dtype=comm_dtype
+                    device=record.local_shard.device
+                )
+                for r in range(self.world_size)
+            ]
+
+            dist.all_gather(
+                gathered_weights,
+                record.local_shard.to(dtype=comm_dtype)
+            )
+
+            full_flat = torch.cat(gathered_weights)
+            full_weight = full_flat.view(record.full_shape)
+            module.weight = torch.nn.Parameter(full_weight)
+
+        return hook
+
+class FSDPWrappedLayer(torch.nn.Module):
+    def __init__(
+        self,
+        model: torch.nn.Module
+    )
+
+
+
+
 
 # =============================================================================
 # Optimizer Sharding
