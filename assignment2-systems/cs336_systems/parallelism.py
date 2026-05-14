@@ -299,6 +299,7 @@ class FullyShardedDataParallel(torch.nn.Module):
 
         self.module = module
         self.shard_records = []
+        self.shard_param_ids = set()
         self.compute_dtype = compute_dtype
         self.hook_handles = []
 
@@ -338,6 +339,7 @@ class FullyShardedDataParallel(torch.nn.Module):
                     shard_lens=shard_lens
                 )
                 self.shard_records.append(record)
+                self.shard_param_ids.add(id(record.local_shard))
 
         for record in self.shard_records:
             self.hook_handles.append(
@@ -433,6 +435,18 @@ class FullyShardedDataParallel(torch.nn.Module):
         param.grad = None
 
         return local_grad.to(dtype=record.local_shard.dtype)
+
+    def forward(self, *inputs, **kwargs):
+        return self.module(*inputs, **kwargs)
+
+    def finish_gradient_synchronization(self):
+        # wait
+        for param in self.module.parameters():
+            if id(param) not in self.shard_param_ids:
+                if param.grad is not None:
+                    dist.all_reduce(param.grad)
+                    param.grad /= self.world_size
+
 
 
 
