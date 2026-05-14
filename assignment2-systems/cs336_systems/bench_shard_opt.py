@@ -82,9 +82,9 @@ def run_benchmark(
         post_opt_mem = torch.cuda.max_memory_allocated(device)
 
         print(f"\t{device}:")
-        print(f"\t\tPeak init mem: {init_mem/1024**2} MiB")
-        print(f"\t\tPre-step mem: {pre_opt_mem/1024**2} MiB")
-        print(f"\t\tPost-step mem: {post_opt_mem/1024**2} MiB")
+        print(f"\t\tPeak init mem: {init_mem/1024**3:.1f} GiB")
+        print(f"\t\tPre-step mem: {pre_opt_mem/1024**3:.1f} GiB")
+        print(f"\t\tPost-step mem: {post_opt_mem/1024**3:.1f} GiB")
 
     finally:
         cleanup()
@@ -104,6 +104,11 @@ def main():
 
     assert torch.cuda.is_available()
     assert args.world_size <= torch.cuda.device_count()
+
+    if args.shard_optimizer:
+        print("\tWith optimizer sharding:")
+    else:
+        print("\tWithout optimizer sharding:")
 
     mp.spawn(
         fn=run_benchmark,
