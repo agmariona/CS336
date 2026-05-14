@@ -276,7 +276,7 @@ STRATEGIES = {
 
 @dataclass
 class ShardedParamRecord:
-    module: torch.nn.Module
+    layer: torch.nn.Module
     param_name: str
     full_shape: torch.Size
     full_dtype: torch.dtype
@@ -284,6 +284,7 @@ class ShardedParamRecord:
     end_idx: int
     local_shard: torch.nn.Parameter
     shard_lens: list[int]
+
 
 class FullyShardedDataParallel(torch.nn.Module):
     def __init__(
@@ -299,11 +300,12 @@ class FullyShardedDataParallel(torch.nn.Module):
         self.module = module
         self.shard_records = []
         self.compute_dtype = compute_dtype
+        self.hook_handles = []
 
         # shard Linear and Embedding layers
-        for module_name, mod in self.module.named_modules():
-            if isinstance(mod, (Linear, Embedding)):
-                weight = mod.weight
+        for layer_name, layer in self.module.named_modules():
+            if isinstance(layer, (Linear, Embedding)):
+                weight = layer.weight
                 full_shape = weight.shape
                 full_dtype = weight.dtype
                 weight = weight.flatten()
@@ -323,11 +325,10 @@ class FullyShardedDataParallel(torch.nn.Module):
                 weight_slice = weight[start_idx:end_idx].detach().clone()
                 weight_shard = torch.nn.Parameter(weight_slice)
 
-                # local module only sees shard
-                mod.weight = weight_shard
+                layer.weight = weight_shard
 
                 record = ShardedParamRecord(
-                    module=mod,
+                    layer=layer,
                     param_name="weight",
                     full_shape=full_shape,
                     full_dtype=full_dtype,
@@ -339,42 +340,100 @@ class FullyShardedDataParallel(torch.nn.Module):
                 self.shard_records.append(record)
 
         for record in self.shard_records:
-            record.module.register_forward_pre_hook(
-                self._make_forward_pre_hook(record)
-            )
+            self.hook_handles.append(
+                record.layer.register_forward_pre_hook(
+                    self._make_forward_pre_hook(record)
+            ))
+            self.hook_handles.append(
+                record.layer.register_forward_hook(
+                    self._make_forward_hook(record)
+            ))
+            self.hook_handles.append(
+                record.layer.register_full_backward_pre_hook(
+                    self._make_full_backward_pre_hook(record)
+            ))
 
     def _make_forward_pre_hook(self, record):
         def hook(module, inputs):
-            if self.compute_dtype is not None:
-                comm_dtype = self.compute_dtype
-            else:
-                comm_dtype = record.local_shard.dtype
-
-            gathered_weights = [
-                torch.empty(
-                    record.shard_lens[r],
-                    dtype=comm_dtype
-                    device=record.local_shard.device
-                )
-                for r in range(self.world_size)
-            ]
-
-            dist.all_gather(
-                gathered_weights,
-                record.local_shard.to(dtype=comm_dtype)
-            )
-
-            full_flat = torch.cat(gathered_weights)
-            full_weight = full_flat.view(record.full_shape)
+            full_weight = self._gather_full_weight(record)
             module.weight = torch.nn.Parameter(full_weight)
-
         return hook
 
-class FSDPWrappedLayer(torch.nn.Module):
-    def __init__(
-        self,
-        model: torch.nn.Module
-    )
+    def _make_forward_hook(self, record):
+        def hook(module, inputs, output):
+            module.weight = record.local_shard
+        return hook
+
+    def _make_full_backward_pre_hook(self, record):
+        def hook(module, grad_output):
+            full_weight = self._gather_full_weight(record)
+            module.weight = torch.nn.Parameter(full_weight)
+            module.weight.register_post_accumulate_grad_hook(
+                self._make_post_accumulate_grad_hook(record)
+            )
+        return hook
+
+    def _make_post_accumulate_grad_hook(self, record):
+        def hook(param):
+            local_grad = self._reduce_scatter_grad(record, param)
+            record.local_shard.grad = local_grad
+            record.layer.weight = record.local_shard
+        return hook
+
+    def _gather_full_weight(self, record):
+        if self.compute_dtype is not None:
+            comm_dtype = self.compute_dtype
+        else:
+            comm_dtype = record.local_shard.dtype
+
+        gathered_weights = [
+            torch.empty(
+                record.shard_lens[r],
+                dtype=comm_dtype,
+                device=record.local_shard.device
+            )
+            for r in range(self.world_size)
+        ]
+
+        dist.all_gather(
+            gathered_weights,
+            record.local_shard.to(dtype=comm_dtype)
+        )
+
+        full_flat = torch.cat(gathered_weights)
+        full_weight = full_flat.view(record.full_shape)
+
+        return full_weight
+
+    def _reduce_scatter_grad(self, record, param):
+        if self.compute_dtype is not None:
+            comm_dtype = self.compute_dtype
+        else:
+            comm_dtype = record.local_shard.dtype
+
+        assert param.grad is not None
+
+        full_grad_flat = param.grad.flatten()
+        assert full_grad_flat.dtype == comm_dtype
+
+        offset = 0
+        grad_chunks = []
+        for length in record.shard_lens:
+            grad_chunks.append(full_grad_flat[offset : offset+length])
+            offset += length
+
+        local_grad = torch.empty(
+            record.local_shard.shape,
+            device=record.local_shard.device,
+            dtype=comm_dtype
+        )
+
+        dist.reduce_scatter(local_grad, grad_chunks)
+        local_grad /= self.world_size
+        param.grad = None
+
+        return local_grad.to(dtype=record.local_shard.dtype)
+
 
 
 
