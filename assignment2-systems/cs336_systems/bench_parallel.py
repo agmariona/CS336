@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallelism", required=True,
         choices=["naive-ddp", "flat-ddp", "overlapped-ddp", "single"],
     )
-    parser.add_argument("--model-class", default="ToyModel",
+    parser.add_argument("--model-class", default="TransformerLM",
         choices=["ToyModel", "TransformerLM"]
     )
     parser.add_argument("--model-size", default="xl",

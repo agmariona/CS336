@@ -262,8 +262,8 @@ def shard_batch(
 STRATEGIES = {
     "naive-ddp": DDPStrategy(NaiveDDP),
     "flat-ddp": DDPStrategy(FlatDDP),
-    "overlapped-ddp": SingleStrategy,
-    "single": DDPStrategy(SingleStrategy)
+    "overlapped-ddp": DDPStrategy(OverlappedDDP),
+    "single": SingleStrategy(),
 }
 
 # =============================================================================
