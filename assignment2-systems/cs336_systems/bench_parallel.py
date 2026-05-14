@@ -12,6 +12,7 @@ from cs336_basics.nn_utils import cross_entropy
 
 from .toy_model import ToyModel
 from .parallelism import NaiveDDP, DDPStrategy, SingleStrategy, STRATEGIES
+from .parallelism import ShardedOptimizer
 from .train_parallel import MODEL_CONFIGS, MODEL_CLS, TLM_VOCAB_SIZE, \
     TLM_CONTEXT_LENGTH
 from .train_parallel import setup, cleanup, train_one_step, compute_loss, \
@@ -22,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--parallelism", required=True,
-        choices=["naive-ddp", "flat-ddp", "overlapped-ddp"],
+        choices=["naive-ddp", "flat-ddp", "overlapped-ddp", "single"],
     )
     parser.add_argument("--model-class", default="ToyModel",
         choices=["ToyModel", "TransformerLM"]
@@ -32,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--world-size", type=int, default=2)
     parser.add_argument("--local-batch-size", type=int, default=2)
+    parser.add_argument("--shard-optimizer", action="store_true")
 
     return parser.parse_args()
 
@@ -42,6 +44,7 @@ def run_benchmark(
     model_class: str,
     model_config: dict,
     backend: str,
+    shard_optimizer: bool,
     local_batch_size: int = 2,
     n_warmup: int = 10,
     n_timed: int = 10
@@ -54,7 +57,10 @@ def run_benchmark(
         model.to(device)
 
         train_model = strategy.wrap_model(model)
-        optimizer = AdamW(train_model.parameters())
+        if shard_optimizer:
+            optimizer = ShardedOptimizer(train_model.parameters(), AdamW)
+        else:
+            optimizer = AdamW(train_model.parameters())
 
         inputs, targets = generate_data(
             model_class, model_config, batch_size=local_batch_size
@@ -170,6 +176,9 @@ def main():
     else:
         backend = "gloo"
 
+    if args.shard_optimizer:
+        assert backend == "nccl"
+
     mp.spawn(
         fn=run_benchmark,
         args=(
@@ -178,6 +187,7 @@ def main():
             args.model_class,
             model_config,
             backend,
+            args.shard_optimizer,
             args.local_batch_size
         ),
         nprocs=args.world_size,
