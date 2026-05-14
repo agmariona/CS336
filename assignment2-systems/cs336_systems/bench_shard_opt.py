@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--shard-optimizer", action="store_true")
-    parser.add_argument("--model-class", default="ToyModel",
+    parser.add_argument("--model-class", default="TransformerLM",
         choices=["ToyModel", "TransformerLM"]
     )
     parser.add_argument("--model-size", default="xl",
@@ -82,9 +82,9 @@ def run_benchmark(
         post_opt_mem = torch.cuda.max_memory_allocated(device)
 
         print(f"\t{device}:")
-        print(f"\t\tPeak init mem: {init_mem}")
-        print(f"\t\tPre-step mem: {pre_opt_mem}")
-        print(f"\t\tPost-step mem: {post_opt_mem}")
+        print(f"\t\tPeak init mem: {init_mem/1024**2} MiB")
+        print(f"\t\tPre-step mem: {pre_opt_mem/1024**2} MiB")
+        print(f"\t\tPost-step mem: {post_opt_mem/1024**2} MiB")
 
     finally:
         cleanup()

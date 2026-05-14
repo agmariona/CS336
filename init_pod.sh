@@ -21,7 +21,8 @@ apt-get install -y \
   python3 \
   python3-pip \
   python3-venv \
-  pkg-config
+  pkg-config \
+  vim
 
 echo "==> Installing uv if needed"
 if ! command -v uv >/dev/null 2>&1; then
@@ -58,12 +59,13 @@ fi
 
 echo "==> Installing project dependencies"
 cd "$WORKDIR/$REPO_DIR/$PROJECT_DIR"
-uv sync --link-mode=copy
+uv sync --frozen --link-mode=copy
 export PATH="$HOME/.local/bin:$PATH"
 
 echo "==> Basic sanity checks"
 uv run python -c "import torch; print('torch', torch.__version__); print('cuda available', torch.cuda.is_available()); print('device count', torch.cuda.device_count())"
 uv run python -c "import cs336_basics, cs336_systems; print('imports ok')"
+uv run python -c "from mpmath import make_mpc; import sympy; print('sympy/mpmath ok')"
 
 echo "==> Done"
 echo "Repo: $WORKDIR/$REPO_DIR"
