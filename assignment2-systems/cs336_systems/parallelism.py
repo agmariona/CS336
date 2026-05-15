@@ -5,6 +5,13 @@ from dataclasses import dataclass
 import math
 
 from cs336_basics.model import Linear, Embedding
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="Full backward hook is firing when gradients are computed with respect to module outputs since no inputs require gradients.*",
+    category=UserWarning,
+)
+
 
 # =============================================================================
 # Data Parallelism
@@ -283,6 +290,7 @@ class ShardedParamRecord:
     start_idx: int
     end_idx: int
     local_shard: torch.nn.Parameter
+    local_shard_data: torch.Tensor
     shard_lens: list[int]
 
 
@@ -330,12 +338,13 @@ class FullyShardedDataParallel(torch.nn.Module):
 
                 record = ShardedParamRecord(
                     layer=layer,
-                    param_name="weight",
+                    param_name=f"{layer_name}.weight",
                     full_shape=full_shape,
                     full_dtype=full_dtype,
                     start_idx=start_idx,
                     end_idx=end_idx,
                     local_shard=weight_shard,
+                    local_shard_data=weight_shard.data,
                     shard_lens=shard_lens
                 )
                 self.shard_records.append(record)
@@ -354,36 +363,44 @@ class FullyShardedDataParallel(torch.nn.Module):
                 record.layer.register_full_backward_pre_hook(
                     self._make_full_backward_pre_hook(record)
             ))
+            self.hook_handles.append(
+                record.local_shard.register_post_accumulate_grad_hook(
+                    self._make_post_accumulate_grad_hook(record)
+            ))
 
     def _make_forward_pre_hook(self, record):
         def hook(module, inputs):
-            full_weight = self._gather_full_weight(record)
-            module.weight = torch.nn.Parameter(full_weight)
+            with torch.no_grad():
+                record.local_shard_data = record.local_shard.data
+                full_weight = self._gather_full_weight(record)
+                module.weight.data = full_weight
         return hook
 
     def _make_forward_hook(self, record):
         def hook(module, inputs, output):
-            module.weight = record.local_shard
+            with torch.no_grad():
+                module.weight.data = record.local_shard_data
         return hook
 
     def _make_full_backward_pre_hook(self, record):
         def hook(module, grad_output):
-            full_weight = self._gather_full_weight(record)
-            module.weight = torch.nn.Parameter(full_weight)
-            module.weight.register_post_accumulate_grad_hook(
-                self._make_post_accumulate_grad_hook(record)
-            )
+            with torch.no_grad():
+                record.local_shard_data = record.local_shard.data
+                full_weight = self._gather_full_weight(record)
+                module.weight.data = full_weight
         return hook
 
     def _make_post_accumulate_grad_hook(self, record):
         def hook(param):
             local_grad = self._reduce_scatter_grad(record, param)
+            param.grad = None
+            with torch.no_grad():
+                record.layer.weight.data = record.local_shard_data
             record.local_shard.grad = local_grad
-            record.layer.weight = record.local_shard
         return hook
 
-    def _gather_full_weight(self, record):
-        if self.compute_dtype is not None:
+    def _gather_full_weight(self, record, use_local_type=False):
+        if self.compute_dtype is not None and not use_local_type:
             comm_dtype = self.compute_dtype
         else:
             comm_dtype = record.local_shard.dtype
@@ -399,7 +416,7 @@ class FullyShardedDataParallel(torch.nn.Module):
 
         dist.all_gather(
             gathered_weights,
-            record.local_shard.to(dtype=comm_dtype)
+            record.local_shard_data.to(dtype=comm_dtype)
         )
 
         full_flat = torch.cat(gathered_weights)
@@ -415,7 +432,7 @@ class FullyShardedDataParallel(torch.nn.Module):
 
         assert param.grad is not None
 
-        full_grad_flat = param.grad.flatten()
+        full_grad_flat = param.grad.flatten() / self.world_size
         assert full_grad_flat.dtype == comm_dtype
 
         offset = 0
@@ -425,16 +442,16 @@ class FullyShardedDataParallel(torch.nn.Module):
             offset += length
 
         local_grad = torch.empty(
-            record.local_shard.shape,
+            (record.shard_lens[self.rank],),
             device=record.local_shard.device,
             dtype=comm_dtype
         )
 
         dist.reduce_scatter(local_grad, grad_chunks)
-        local_grad /= self.world_size
-        param.grad = None
+        # local_grad /= self.world_size
 
-        return local_grad.to(dtype=record.local_shard.dtype)
+        return local_grad.to(dtype=record.full_dtype)
+
 
     def forward(self, *inputs, **kwargs):
         return self.module(*inputs, **kwargs)
@@ -446,6 +463,24 @@ class FullyShardedDataParallel(torch.nn.Module):
                 if param.grad is not None:
                     dist.all_reduce(param.grad)
                     param.grad /= self.world_size
+
+        # for record in self.shard_records:
+            # print(f'\t{record.param_name}')
+            # print(f'\t{record.local_shard is record.layer.weight}')
+            # print(f'\t{record.local_shard.grad is None}')
+            # print(f'\t{record.local_shard.dtype}')
+            # print('\n')
+
+    def gather_full_params(self):
+        full_params = {}
+        for record in self.shard_records:
+            full_weight = self._gather_full_weight(record, use_local_type=True)
+            full_params[record.param_name] = full_weight
+        for name, param in self.module.named_parameters():
+            if id(param) not in self.shard_param_ids:
+                full_params[name] = param.detach().clone()
+        return full_params
+
 
 
 

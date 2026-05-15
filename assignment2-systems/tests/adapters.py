@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from cs336_systems.flash_attention import FlashAttention2, \
-    FlashAttention2_Triton
-from cs336_systems.parallelism import OverlappedDDP, ShardedOptimizer
+from cs336_systems.parallelism import OverlappedDDP, ShardedOptimizer, \
+    FullyShardedDataParallel
 
 
 def get_flashattention_autograd_function_pytorch() -> type:
@@ -16,6 +15,8 @@ def get_flashattention_autograd_function_pytorch() -> type:
     Returns:
         A class object (not an instance of the class)
     """
+    from cs336_systems.flash_attention import FlashAttention2, \
+        FlashAttention2_Triton
     return FlashAttention2
 
 
@@ -31,6 +32,8 @@ def get_flashattention_autograd_function_triton() -> type:
     Returns:
         A class object (not an instance of the class)
     """
+    from cs336_systems.flash_attention import FlashAttention2, \
+        FlashAttention2_Triton
     return FlashAttention2_Triton
 
 
@@ -86,7 +89,7 @@ def get_fsdp(module: torch.nn.Module, compute_dtype: torch.dtype | None = None) 
         Instance of an FSDP class.
     """
     # For example: return FSDP(module, compute_dtype=compute_dtype)
-    raise NotImplementedError
+    return FullyShardedDataParallel(module, compute_dtype=compute_dtype)
 
 
 def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
@@ -101,7 +104,7 @@ def fsdp_on_after_backward(fsdp_model: torch.nn.Module, optimizer: torch.optim.O
             Optimizer being used with the FSDP-wrapped model.
     """
     # For example: fsdp_model.finish_gradient_synchronization()
-    raise NotImplementedError
+    fsdp_model.finish_gradient_synchronization()
 
 
 def fsdp_gather_full_params(fsdp_model: torch.nn.Module) -> dict[str, torch.Tensor]:
@@ -115,7 +118,7 @@ def fsdp_gather_full_params(fsdp_model: torch.nn.Module) -> dict[str, torch.Tens
     Returns:
         State dictionary mapping parameter names to full (unsharded) tensors.
     """
-    raise NotImplementedError
+    return fsdp_model.gather_full_params()
 
 
 def get_sharded_optimizer(params, optimizer_cls: type[torch.optim.Optimizer], **kwargs) -> torch.optim.Optimizer:

@@ -113,7 +113,6 @@ class FlashAttention2(torch.autograd.Function):
 
         return dQ, dK, dV, None
 
-
 @triton.jit
 def flash_fwd_kernel(
     Q_ptr, K_ptr, V_ptr,
